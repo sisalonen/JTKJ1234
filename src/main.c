@@ -35,6 +35,7 @@ int main() {
    
     while (true) {
         //Turn the led 0n
+        
         pico_set_led(true);
         // Wait 1 s
         sleep_ms(LED_DELAY_MS);

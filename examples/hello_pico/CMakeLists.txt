@@ -6,6 +6,8 @@ add_executable(${DEFAULT_TARGET}
 
 target_link_libraries(${DEFAULT_TARGET} PRIVATE
   pico_stdlib
+  FreeRTOS-Kernel
+  FreeRTOS-Kernel-Heap4
 )
 
 pico_enable_stdio_usb(${DEFAULT_TARGET} 1)
