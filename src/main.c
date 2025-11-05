@@ -24,12 +24,12 @@ typedef enum
 {
     IDLE,
     ANGLE,
-} State_t;
+} SensorState_t;
 
 float pitch = 0.0f;
 
 TaskHandle_t mySensorTask = NULL;
-State_t sensorState = IDLE;
+SensorState_t sensorState = ANGLE;
 
 void update_orientation(float ax, float ay, float az,
                         float gx, float gy, float gz,
@@ -72,7 +72,9 @@ static void sensor_task(void *arg)
 
             update_orientation(ax, ay, az, gx, gy, gz, dt);
 
-            vTaskDelay(pdMS_TO_TICKS(5));
+            // printf("\033[2J\033[H");
+            // printf("%.2f", pitch);
+            vTaskDelay(pdMS_TO_TICKS(3));
         }
     }
 }
@@ -84,19 +86,64 @@ static void sensor_task(void *arg)
 typedef enum
 {
     OFF,
+    B1_FALL,
+    B1_RISE,
+    B2_FALL,
+    B2_RISE,
     B1_SHORT,
     B1_LONG,
     B2_SHORT,
     B2_LONG
-} Event_t;
+} buttonEvent_t;
 
-Event_t latestEvent = OFF;
-// buttons currently bound to whatever actions for testing.
+buttonEvent_t bEvent = OFF;
+
+TickType_t lastInterrupt1, pressStart1, pressStop1 = 0;
+TickType_t lastInterrupt2, pressStart2, pressStop2 = 0;
+
+TaskHandle_t myButtonTask = NULL;
+
+static void button_task(void *arg)
+{
+    (void)arg;
+
+    for (;;)
+    {
+        TickType_t duration;
+        vTaskSuspend(NULL);
+        if (bEvent == B1_FALL)
+        {
+            duration = pressStop1 - pressStart1;
+            if (duration < pdMS_TO_TICKS(1000))
+            {
+                bEvent = B1_SHORT;
+            }
+            else
+            {
+                bEvent = B1_LONG;
+            }
+        }
+        else if (bEvent == B2_FALL)
+        {
+
+            duration = pressStop2 - pressStart2;
+            if (duration < pdMS_TO_TICKS(1000))
+            {
+                bEvent = B2_SHORT;
+            }
+            else
+            {
+                bEvent = B2_LONG;
+            }
+        }
+        vTaskResume(myMainTask);
+    }
+}
+
 void button_handler(uint gpio, uint32_t events)
 {
     {
-        static TickType_t lastInterrupt1 = 0;
-        static TickType_t lastInterrupt2 = 0;
+
         TickType_t now = xTaskGetTickCountFromISR();
 
         if (gpio == BUTTON1)
@@ -105,55 +152,125 @@ void button_handler(uint gpio, uint32_t events)
                 return;
             lastInterrupt1 = now;
 
-            latestEvent = B1_SHORT;
-        }
+            if (events & GPIO_IRQ_EDGE_RISE)
+            {
 
-        else if (gpio == BUTTON2)
+                pressStart1 = now;
+                bEvent = B1_RISE;
+            }
+            else if (events & GPIO_IRQ_EDGE_FALL)
+            {
+                pressStop1 = now;
+                bEvent = B1_FALL;
+
+                xTaskResumeFromISR(myButtonTask);
+            }
+        }
+        if (gpio == BUTTON2)
         {
             if (now - lastInterrupt2 < pdMS_TO_TICKS(100))
                 return;
             lastInterrupt2 = now;
 
-            latestEvent = B2_SHORT;
+            if (events & GPIO_IRQ_EDGE_RISE)
+            {
+
+                pressStart2 = now;
+                bEvent = B2_RISE;
+            }
+            else if (events & GPIO_IRQ_EDGE_FALL)
+            {
+                pressStop2 = now;
+                bEvent = B2_FALL;
+
+                xTaskResumeFromISR(myButtonTask);
+            }
         }
-        xTaskResumeFromISR(myMainTask);
     }
 }
 
 /* -------------------------------------------------------------------------- */
-/*                                program state                               */
+/*                                main state machine                          */
 /* -------------------------------------------------------------------------- */
+typedef enum
+{
+    MENU,
+    MSG_GEN
+} ProgramState_t;
+
+ProgramState_t programState = MENU;
+
+void msg_print(const char *message, bool msg_only)
+{
+
+    printf("\033[2J\033[H");
+    if (message)
+    {
+        if (msg_only)
+        {
+            printf("%s\n", message);
+        }
+        else
+        {
+            printf("Current message: { %s }\n", message);
+        }
+    }
+}
+
+char message_str[50] = "";
+void msg_gen()
+{
+    switch (bEvent)
+    {
+    case B1_SHORT:
+
+        if (fabsf(pitch) > 45.0f)
+        {
+            strcat(message_str, ".");
+        }
+        else
+        {
+            strcat(message_str, "-");
+        }
+        printf("f-pitch %.2f", pitch);
+        printf("abs_pitch %d", pitch);
+        break;
+
+    case B2_SHORT:
+        strcat(message_str, "␣");
+        break;
+
+    case B1_LONG:
+        msg_print("Message sent!", true);
+        vTaskDelay(pdMS_TO_TICKS(4000));
+        break;
+
+    case B2_LONG:
+        message_str[0] = '\0'; // flush message
+        msg_print("Message flushed!", true);
+        vTaskDelay(pdMS_TO_TICKS(4000));
+        break;
+    }
+    msg_print(message_str, false);
+}
 
 static void main_task(void *arg)
 {
     (void)arg;
-    if (sensorState == IDLE)
-    {
-        sensorState = ANGLE;
-    }
+
     for (;;)
     {
-
         vTaskSuspend(NULL);
-        if (latestEvent == B1_SHORT)
+        switch (programState)
         {
-
-            if (abs((int)pitch) > 45)
-            {
-                printf(".");
-            }
-            else
-            {
-                printf("-");
-            }
+        case MENU:
+            programState = MSG_GEN;
+            break;
+        case MSG_GEN:
+            msg_gen();
+            break;
         }
-        else if (latestEvent == B2_SHORT)
-        {
-            printf("␣");
-
-            toggle_red_led();
-        }
-        latestEvent = OFF;
+        bEvent = OFF;
     }
 }
 
@@ -194,30 +311,37 @@ int main()
 
     // Task creation
 
-    BaseType_t result = xTaskCreate(example_task,       // (en) Task function
-                                    "example",          // (en) Name of the task
-                                    DEFAULT_STACK_SIZE, // (en) Size of the stack for this task (in words). Generally 1024 or 2048
-                                    NULL,               // (en) Arguments of the task
-                                    1,                  // (en) Priority of this task
-                                    &myExampleTask);    // (en) A handle to control the execution of this task
+    xTaskCreate(example_task,       // (en) Task function
+                "example",          // (en) Name of the task
+                DEFAULT_STACK_SIZE, // (en) Size of the stack for this task (in words). Generally 1024 or 2048
+                NULL,               // (en) Arguments of the task
+                1,                  // (en) Priority of this task
+                &myExampleTask);    // (en) A handle to control the execution of this task
 
-    result = xTaskCreate(sensor_task,        // (en) Task function
-                         "sensor",           // (en) Name of the task
-                         DEFAULT_STACK_SIZE, // (en) Size of the stack for this task (in words). Generally 1024 or 2048
-                         NULL,               // (en) Arguments of the task
-                         2,                  // (en) Priority of this task
-                         &mySensorTask);     // (en) A handle to control the execution of this task
+    xTaskCreate(main_task,
+                "main",
+                DEFAULT_STACK_SIZE,
+                NULL,
+                2,
+                &myMainTask);
 
-    result = xTaskCreate(main_task,          // (en) Task function
-                         "main",             // (en) Name of the task
-                         DEFAULT_STACK_SIZE, // (en) Size of the stack for this task (in words). Generally 1024 or 2048
-                         NULL,               // (en) Arguments of the task
-                         2,                  // (en) Priority of this task
-                         &myMainTask);       // (en) A handle to control the execution of this task
+    xTaskCreate(sensor_task,
+                "sensor",
+                DEFAULT_STACK_SIZE,
+                NULL,
+                2,
+                &mySensorTask);
+
+    xTaskCreate(button_task,
+                "button",
+                DEFAULT_STACK_SIZE,
+                NULL,
+                2,
+                &myButtonTask);
 
     // Interruption callbacks
-    gpio_set_irq_enabled_with_callback(BUTTON1, GPIO_IRQ_EDGE_FALL, true, button_handler);
-    gpio_set_irq_enabled(BUTTON2, GPIO_IRQ_EDGE_FALL, true);
+    gpio_set_irq_enabled_with_callback(BUTTON1, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true, button_handler);
+    gpio_set_irq_enabled(BUTTON2, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true);
 
     // Start the scheduler (never returns)
     vTaskStartScheduler();
