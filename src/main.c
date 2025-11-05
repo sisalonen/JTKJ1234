@@ -8,11 +8,13 @@
 #include <queue.h>
 #include <task.h>
 #include <math.h>
+#include <stdlib.h>
 
 #include "tkjhat/sdk.h"
 
 // Default stack size for the tasks. It can be reduced to 1024 if task is not using lot of memory.
 #define DEFAULT_STACK_SIZE 2048
+TaskHandle_t myMainTask = NULL;
 
 /* -------------------------------------------------------------------------- */
 /*                                   sensors                                  */
@@ -55,9 +57,10 @@ static void sensor_task(void *arg)
         switch (sensorState)
         {
         case IDLE:
-            printf("Suspending sensor\n");
-            vTaskSuspend(NULL);
-            printf("Resuming sensor\n");
+            // printf("Suspending sensor\n");
+            // vTaskSuspend(NULL);
+            // printf("Resuming sensor\n");
+            vTaskDelay(pdMS_TO_TICKS(50));
 
         case ANGLE:
 
@@ -69,7 +72,6 @@ static void sensor_task(void *arg)
 
             update_orientation(ax, ay, az, gx, gy, gz, dt);
 
-            printf("Pitch: %.2f°, \n", pitch);
             vTaskDelay(pdMS_TO_TICKS(5));
         }
     }
@@ -81,12 +83,14 @@ static void sensor_task(void *arg)
 
 typedef enum
 {
+    OFF,
     B1_SHORT,
     B1_LONG,
     B2_SHORT,
     B2_LONG
 } Event_t;
 
+Event_t latestEvent = OFF;
 // buttons currently bound to whatever actions for testing.
 void button_handler(uint gpio, uint32_t events)
 {
@@ -97,29 +101,59 @@ void button_handler(uint gpio, uint32_t events)
 
         if (gpio == BUTTON1)
         {
-            if (now - lastInterrupt1 < pdMS_TO_TICKS(50))
+            if (now - lastInterrupt1 < pdMS_TO_TICKS(100))
                 return;
             lastInterrupt1 = now;
 
-            if (sensorState == IDLE)
-            {
-                sensorState = ANGLE;
-                xTaskResumeFromISR(mySensorTask);
-            }
-            else
-            {
-                sensorState = IDLE;
-            }
+            latestEvent = B1_SHORT;
         }
 
         else if (gpio == BUTTON2)
         {
-            if (now - lastInterrupt2 < pdMS_TO_TICKS(50))
+            if (now - lastInterrupt2 < pdMS_TO_TICKS(100))
                 return;
             lastInterrupt2 = now;
 
+            latestEvent = B2_SHORT;
+        }
+        xTaskResumeFromISR(myMainTask);
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                program state                               */
+/* -------------------------------------------------------------------------- */
+
+static void main_task(void *arg)
+{
+    (void)arg;
+    if (sensorState == IDLE)
+    {
+        sensorState = ANGLE;
+    }
+    for (;;)
+    {
+
+        vTaskSuspend(NULL);
+        if (latestEvent == B1_SHORT)
+        {
+
+            if (abs((int)pitch) > 45)
+            {
+                printf(".");
+            }
+            else
+            {
+                printf("-");
+            }
+        }
+        else if (latestEvent == B2_SHORT)
+        {
+            printf("␣");
+
             toggle_red_led();
         }
+        latestEvent = OFF;
     }
 }
 
@@ -135,8 +169,8 @@ static void example_task(void *arg)
     for (;;)
     {
         tight_loop_contents(); // Modify with application code here.
-        printf("Example task alive\n");
-        vTaskDelay(pdMS_TO_TICKS(2000));
+        // printf("Example task alive\n");
+        vTaskDelay(pdMS_TO_TICKS(5000));
     }
 }
 
@@ -173,6 +207,13 @@ int main()
                          NULL,               // (en) Arguments of the task
                          2,                  // (en) Priority of this task
                          &mySensorTask);     // (en) A handle to control the execution of this task
+
+    result = xTaskCreate(main_task,          // (en) Task function
+                         "main",             // (en) Name of the task
+                         DEFAULT_STACK_SIZE, // (en) Size of the stack for this task (in words). Generally 1024 or 2048
+                         NULL,               // (en) Arguments of the task
+                         2,                  // (en) Priority of this task
+                         &myMainTask);       // (en) A handle to control the execution of this task
 
     // Interruption callbacks
     gpio_set_irq_enabled_with_callback(BUTTON1, GPIO_IRQ_EDGE_FALL, true, button_handler);
