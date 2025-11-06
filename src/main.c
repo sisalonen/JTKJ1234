@@ -15,6 +15,7 @@
 // Default stack size for the tasks. It can be reduced to 1024 if task is not using lot of memory.
 #define DEFAULT_STACK_SIZE 2048
 TaskHandle_t myMainTask = NULL;
+QueueHandle_t pitchQueue = NULL;
 char message_str[80] = "";
 char display_msg[80] = "";
 
@@ -33,18 +34,11 @@ float pitch = 0.0f;
 TaskHandle_t mySensorTask = NULL;
 SensorState_t sensorState = ANGLE;
 
-void update_orientation(float ax, float ay, float az,
-                        float gx, float gy, float gz,
-                        float dt)
+void update_orientation(float ax, float ay, float az)
 {
-    // Compute accelerometer angles
     float pitch_acc = atan2f(-ax, sqrtf(ay * ay + az * az)) * 180.0f / M_PI;
-
-    // Integrate gyroscope
-    float pitch_gyro = pitch + gy * dt;
-
-    // Complementary filter
-    pitch = ALPHA * pitch_gyro + (1.0f - ALPHA) * pitch_acc;
+    pitch = pitch_acc;
+    xQueueSend(pitchQueue, &pitch, 0); // Send pitch to queue
 }
 
 static void sensor_task(void *arg)
@@ -52,32 +46,15 @@ static void sensor_task(void *arg)
     (void)arg;
 
     float ax, ay, az, gx, gy, gz, temp;
-    unsigned long last_time = time_us_32();
 
     for (;;)
     {
-        switch (sensorState)
-        {
-        case IDLE:
-            // printf("Suspending sensor\n");
-            // vTaskSuspend(NULL);
-            // printf("Resuming sensor\n");
-            vTaskDelay(pdMS_TO_TICKS(50));
+        vTaskSuspend(NULL);
+        ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &temp);
 
-        case ANGLE:
+        update_orientation(ax, ay, az);
 
-            ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &temp);
-
-            unsigned long now = time_us_32();
-            float dt = (now - last_time) / 1e6f;
-            last_time = now;
-
-            update_orientation(ax, ay, az, gx, gy, gz, dt);
-
-            // printf("\033[2J\033[H");
-            // printf("%.2f", pitch);
-            vTaskDelay(pdMS_TO_TICKS(3));
-        }
+        printf("Pitch: %.2f degrees\n", pitch);
     }
 }
 
@@ -203,12 +180,9 @@ static void display_task(void *arg)
     for (;;)
     {
         vTaskSuspend(NULL);
-        vTaskSuspend(mySensorTask);
-        init_display();
         clear_display();
         write_text_xy(4, 24, display_msg);
         display_msg[0] = '\0'; // flush message
-        vTaskResume(mySensorTask);
     }
 }
 /* -------------------------------------------------------------------------- */
@@ -245,17 +219,19 @@ void msg_gen()
     switch (bEvent)
     {
     case B1_SHORT:
-        printf("f-pitch %.2f", pitch);
-        printf("abs_pitch %d", pitch);
-        if (fabsf(pitch) > 45.0f)
+        vTaskResume(mySensorTask);
+        float current_pitch;
+        if (xQueueReceive(pitchQueue, &current_pitch, pdMS_TO_TICKS(300)) == pdTRUE)
         {
-            strcat(message_str, ".");
+            if (fabsf(current_pitch) > 45.0f)
+            {
+                strcat(message_str, ".");
+            }
+            else
+            {
+                strcat(message_str, "-");
+            }
         }
-        else
-        {
-            strcat(message_str, "-");
-        }
-
         break;
 
     case B2_SHORT:
@@ -307,7 +283,8 @@ static void main_task(void *arg)
                 programState = MSG_GEN;
                 break;
             }
-            bEvent = OFF;
+            break;
+
         case MSG_GEN:
             msg_gen();
             break;
@@ -346,12 +323,15 @@ int main()
 
     init_red_led();
     init_i2c_default();
+    init_display();
     init_ICM42670();
     // clear_display();
     // write_text("message");
 
     sleep_ms(3000);
     ICM42670_start_with_default_values();
+
+    pitchQueue = xQueueCreate(1, sizeof(float));
 
     // Task creation
 
