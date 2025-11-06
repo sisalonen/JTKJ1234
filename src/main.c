@@ -15,6 +15,8 @@
 // Default stack size for the tasks. It can be reduced to 1024 if task is not using lot of memory.
 #define DEFAULT_STACK_SIZE 2048
 TaskHandle_t myMainTask = NULL;
+char message_str[80] = "";
+char display_msg[80] = "";
 
 /* -------------------------------------------------------------------------- */
 /*                                   sensors                                  */
@@ -188,7 +190,27 @@ void button_handler(uint gpio, uint32_t events)
         }
     }
 }
+/* -------------------------------------------------------------------------- */
+/*                                   display                                  */
+/* -------------------------------------------------------------------------- */
 
+TaskHandle_t myDisplayTask = NULL;
+
+static void display_task(void *arg)
+{
+    (void)arg;
+
+    for (;;)
+    {
+        vTaskSuspend(NULL);
+        vTaskSuspend(mySensorTask);
+        init_display();
+        clear_display();
+        write_text_xy(4, 24, display_msg);
+        display_msg[0] = '\0'; // flush message
+        vTaskResume(mySensorTask);
+    }
+}
 /* -------------------------------------------------------------------------- */
 /*                                main state machine                          */
 /* -------------------------------------------------------------------------- */
@@ -202,7 +224,6 @@ ProgramState_t programState = MENU;
 
 void msg_print(const char *message, bool msg_only)
 {
-
     printf("\033[2J\033[H");
     if (message)
     {
@@ -215,15 +236,17 @@ void msg_print(const char *message, bool msg_only)
             printf("Current message: { %s }\n", message);
         }
     }
+    strcat(display_msg, message);
+    vTaskResume(myDisplayTask);
 }
 
-char message_str[50] = "";
 void msg_gen()
 {
     switch (bEvent)
     {
     case B1_SHORT:
-
+        printf("f-pitch %.2f", pitch);
+        printf("abs_pitch %d", pitch);
         if (fabsf(pitch) > 45.0f)
         {
             strcat(message_str, ".");
@@ -232,8 +255,7 @@ void msg_gen()
         {
             strcat(message_str, "-");
         }
-        printf("f-pitch %.2f", pitch);
-        printf("abs_pitch %d", pitch);
+
         break;
 
     case B2_SHORT:
@@ -257,15 +279,35 @@ void msg_gen()
 static void main_task(void *arg)
 {
     (void)arg;
-
+    bool angle;
     for (;;)
     {
         vTaskSuspend(NULL);
         switch (programState)
         {
         case MENU:
-            programState = MSG_GEN;
-            break;
+
+            switch (bEvent)
+            {
+            case B1_SHORT:
+                if (!angle)
+                {
+                    msg_print(" angle\n*lux", false);
+                    angle = true;
+                }
+                else
+                {
+                    msg_print("*angle\n lux", false);
+                    angle = false;
+                }
+
+                break;
+
+            case B2_SHORT:
+                programState = MSG_GEN;
+                break;
+            }
+            bEvent = OFF;
         case MSG_GEN:
             msg_gen();
             break;
@@ -305,6 +347,8 @@ int main()
     init_red_led();
     init_i2c_default();
     init_ICM42670();
+    // clear_display();
+    // write_text("message");
 
     sleep_ms(3000);
     ICM42670_start_with_default_values();
@@ -329,7 +373,7 @@ int main()
                 "sensor",
                 DEFAULT_STACK_SIZE,
                 NULL,
-                2,
+                3,
                 &mySensorTask);
 
     xTaskCreate(button_task,
@@ -338,6 +382,13 @@ int main()
                 NULL,
                 2,
                 &myButtonTask);
+
+    xTaskCreate(display_task,
+                "display",
+                DEFAULT_STACK_SIZE,
+                NULL,
+                2,
+                &myDisplayTask);
 
     // Interruption callbacks
     gpio_set_irq_enabled_with_callback(BUTTON1, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true, button_handler);
