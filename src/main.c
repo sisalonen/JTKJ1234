@@ -14,8 +14,12 @@
 
 // Default stack size for the tasks. It can be reduced to 1024 if task is not using lot of memory.
 #define DEFAULT_STACK_SIZE 2048
+#define DEBOUNCE_MS 50
+#define LONG_PRESS_DURATION_MS 1500
+
 TaskHandle_t myMainTask = NULL;
 QueueHandle_t pitchQueue = NULL;
+
 char message_str[80] = "";
 char display_msg[80] = "";
 
@@ -64,58 +68,69 @@ static void sensor_task(void *arg)
 
 typedef enum
 {
-    OFF,
-    B1_FALL,
-    B1_RISE,
-    B2_FALL,
-    B2_RISE,
+    B_NONE,
     B1_SHORT,
     B1_LONG,
     B2_SHORT,
     B2_LONG
 } buttonEvent_t;
-
-buttonEvent_t bEvent = OFF;
-
-TickType_t lastInterrupt1, pressStart1, pressStop1 = 0;
-TickType_t lastInterrupt2, pressStart2, pressStop2 = 0;
-
-TaskHandle_t myButtonTask = NULL;
-
-static void button_task(void *arg)
+typedef struct
 {
-    (void)arg;
+    uint gpio;
+    TickType_t pressStart;
+    TickType_t lastInterrupt;
+    bool longPressDetected;
+} ButtonState_t;
 
+buttonEvent_t bEvent = B_NONE;
+
+TaskHandle_t myButton1Task = NULL;
+TaskHandle_t myButton2Task = NULL;
+
+ButtonState_t button1 = {.gpio = BUTTON1, .pressStart = 0, .lastInterrupt = 0, .longPressDetected = false};
+ButtonState_t button2 = {.gpio = BUTTON2, .pressStart = 0, .lastInterrupt = 0, .longPressDetected = false};
+
+void process_button(ButtonState_t *btn, buttonEvent_t shortPressEvent, buttonEvent_t longPressEvent)
+{
     for (;;)
     {
-        TickType_t duration;
-        vTaskSuspend(NULL);
-        if (bEvent == B1_FALL)
-        {
-            duration = pressStop1 - pressStart1;
-            if (duration < pdMS_TO_TICKS(1000))
-            {
-                bEvent = B1_SHORT;
-            }
-            else
-            {
-                bEvent = B1_LONG;
-            }
-        }
-        else if (bEvent == B2_FALL)
-        {
+        bool isPressed = gpio_get(btn->gpio) == 0;
+        bool longPress = (xTaskGetTickCount() - btn->pressStart > pdMS_TO_TICKS(LONG_PRESS_DURATION_MS));
 
-            duration = pressStop2 - pressStart2;
-            if (duration < pdMS_TO_TICKS(1000))
-            {
-                bEvent = B2_SHORT;
-            }
-            else
-            {
-                bEvent = B2_LONG;
-            }
+        if (!longPress && isPressed)
+        {
+            bEvent = shortPressEvent;
+            break;
         }
-        vTaskResume(myMainTask);
+        else if (longPress)
+        {
+            bEvent = longPressEvent;
+            btn->longPressDetected = true;
+            break;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    vTaskResume(myMainTask);
+}
+
+static void button1_task(void *arg)
+{
+    (void)arg;
+    for (;;)
+    {
+        vTaskSuspend(NULL);
+        process_button(&button1, B1_SHORT, B1_LONG);
+    }
+}
+
+static void button2_task(void *arg)
+{
+    (void)arg;
+    for (;;)
+    {
+        vTaskSuspend(NULL);
+        process_button(&button2, B2_SHORT, B2_LONG);
     }
 }
 
@@ -125,45 +140,34 @@ void button_handler(uint gpio, uint32_t events)
 
         TickType_t now = xTaskGetTickCountFromISR();
 
-        if (gpio == BUTTON1)
+        // ternary operator to decide which button data we point to.
+        ButtonState_t *btn = (gpio == BUTTON1) ? &button1 : &button2;
+        TaskHandle_t taskHandle = (gpio == BUTTON1) ? myButton1Task : myButton2Task;
+
+        // guard for unwanted interruptions that sometimes happen with single button press
+        if (now - btn->lastInterrupt < pdMS_TO_TICKS(DEBOUNCE_MS))
         {
-            if (now - lastInterrupt1 < pdMS_TO_TICKS(100))
-                return;
-            lastInterrupt1 = now;
-
-            if (events & GPIO_IRQ_EDGE_RISE)
-            {
-
-                pressStart1 = now;
-                bEvent = B1_RISE;
-            }
-            else if (events & GPIO_IRQ_EDGE_FALL)
-            {
-                pressStop1 = now;
-                bEvent = B1_FALL;
-
-                xTaskResumeFromISR(myButtonTask);
-            }
+            return;
         }
-        if (gpio == BUTTON2)
+
+        btn->lastInterrupt = now;
+
+        if (events & GPIO_IRQ_EDGE_RISE) // Button pressed
         {
-            if (now - lastInterrupt2 < pdMS_TO_TICKS(100))
+            btn->pressStart = now;
+            btn->longPressDetected = false;
+
+            xTaskResumeFromISR(taskHandle);
+        }
+        else if (events & GPIO_IRQ_EDGE_FALL) // Button released
+        {
+            // After long press detection
+            {
+                if (btn->longPressDetected)
+                    btn->longPressDetected = false;
                 return;
-            lastInterrupt2 = now;
-
-            if (events & GPIO_IRQ_EDGE_RISE)
-            {
-
-                pressStart2 = now;
-                bEvent = B2_RISE;
             }
-            else if (events & GPIO_IRQ_EDGE_FALL)
-            {
-                pressStop2 = now;
-                bEvent = B2_FALL;
-
-                xTaskResumeFromISR(myButtonTask);
-            }
+            xTaskResumeFromISR(taskHandle);
         }
     }
 }
@@ -198,7 +202,7 @@ ProgramState_t programState = MENU;
 
 void msg_print(const char *message, bool msg_only)
 {
-    printf("\033[2J\033[H");
+    // printf("\033[2J\033[H");
     if (message)
     {
         if (msg_only)
@@ -289,7 +293,7 @@ static void main_task(void *arg)
             msg_gen();
             break;
         }
-        bEvent = OFF;
+        bEvent = B_NONE;
     }
 }
 
@@ -356,12 +360,19 @@ int main()
                 3,
                 &mySensorTask);
 
-    xTaskCreate(button_task,
-                "button",
+    xTaskCreate(button1_task,
+                "button1",
                 DEFAULT_STACK_SIZE,
                 NULL,
                 2,
-                &myButtonTask);
+                &myButton1Task);
+
+    xTaskCreate(button2_task,
+                "button2",
+                DEFAULT_STACK_SIZE,
+                NULL,
+                2,
+                &myButton2Task);
 
     xTaskCreate(display_task,
                 "display",
