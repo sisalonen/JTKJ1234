@@ -811,7 +811,7 @@ int init_ICM42670() {
     icm_soft_reset();
     
     //DETECT ADDRESS FOR AD0 floating pin: 
-    int address = ICM42670_autodetect_address();
+    int address = 0x69;
     if (address == -1){
         printf("Address could not be found");
     }
