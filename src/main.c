@@ -14,14 +14,20 @@
 
 // Default stack size for the tasks. It can be reduced to 1024 if task is not using lot of memory.
 #define DEFAULT_STACK_SIZE 2048
+
+// Button related defines
 #define DEBOUNCE_MS 50
-#define LONG_PRESS_DURATION_MS 1500
+#define LONG_PRESS_DURATION_MS 1000
+
+// Display related defines
+#define DISPLAY_LINE_LEN 22
+#define DISPLAY_DYNAMIC_LINES 3
 
 TaskHandle_t myMainTask = NULL;
 QueueHandle_t pitchQueue = NULL;
 
 char message_str[80] = "";
-char display_msg[80] = "";
+// char display_msg[80] = "";
 
 /* -------------------------------------------------------------------------- */
 /*                                   sensors                                  */
@@ -177,6 +183,17 @@ void button_handler(uint gpio, uint32_t events)
 
 TaskHandle_t myDisplayTask = NULL;
 
+typedef struct
+{
+    char topHeader[DISPLAY_LINE_LEN];
+    char dynamicContent[DISPLAY_DYNAMIC_LINES][DISPLAY_LINE_LEN];
+    char buttonInfo[DISPLAY_LINE_LEN];
+} displayData_t;
+
+displayData_t menu = {.topHeader = "-------MENU-------", .buttonInfo = "switch/-  confirm/-"};
+displayData_t msg_menu = {.topHeader = "Current message:", .buttonInfo = "gen/send  break/back"};
+displayData_t *displayPtr = NULL;
+
 static void display_task(void *arg)
 {
     (void)arg;
@@ -185,8 +202,19 @@ static void display_task(void *arg)
     {
         vTaskSuspend(NULL);
         clear_display();
-        write_text_xy(4, 24, display_msg);
-        display_msg[0] = '\0'; // flush message
+        write_text_xy(0, 2, displayPtr->topHeader);
+
+        for (int i = 0; i < DISPLAY_DYNAMIC_LINES; i++)
+        {
+            if (displayPtr->dynamicContent[i][0] == '\0')
+            {
+                write_text_xy(0, (60 / 4) * (i + 1), "");
+            }
+            write_text_xy(0, (60 / 4) * (i + 1), displayPtr->dynamicContent[i]);
+            memset(displayPtr->dynamicContent[i], 0, DISPLAY_LINE_LEN);
+        }
+
+        write_text_xy(0, 56, displayPtr->buttonInfo);
     }
 }
 /* -------------------------------------------------------------------------- */
@@ -214,7 +242,17 @@ void msg_print(const char *message, bool msg_only)
             printf("Current message: { %s }\n", message);
         }
     }
-    strcat(display_msg, message);
+
+    displayPtr = &msg_menu;
+    strcpy(displayPtr->dynamicContent[1], message);
+    vTaskResume(myDisplayTask);
+}
+
+void print_menu(bool mode)
+{
+    displayPtr = &menu;
+    strcpy(displayPtr->dynamicContent[0], mode ? "*Angle" : " Angle");
+    strcpy(displayPtr->dynamicContent[1], mode ? " Lux" : "*Lux");
     vTaskResume(myDisplayTask);
 }
 
@@ -222,7 +260,7 @@ void msg_gen()
 {
     switch (bEvent)
     {
-    case B1_SHORT:
+    case B2_SHORT:
         vTaskResume(mySensorTask);
         float current_pitch;
         if (xQueueReceive(pitchQueue, &current_pitch, pdMS_TO_TICKS(300)) == pdTRUE)
@@ -238,20 +276,20 @@ void msg_gen()
         }
         break;
 
-    case B2_SHORT:
+    case B1_SHORT:
         strcat(message_str, "␣");
         break;
 
-    case B1_LONG:
+    case B2_LONG:
         msg_print("Message sent!", true);
-        vTaskDelay(pdMS_TO_TICKS(4000));
+        vTaskDelay(pdMS_TO_TICKS(1000));
         break;
 
-    case B2_LONG:
+    case B1_LONG:
         message_str[0] = '\0'; // flush message
-        msg_print("Message flushed!", true);
-        vTaskDelay(pdMS_TO_TICKS(4000));
-        break;
+        programState = MENU;
+        bEvent = B_NONE;
+        return;
     }
     msg_print(message_str, false);
 }
@@ -259,41 +297,38 @@ void msg_gen()
 static void main_task(void *arg)
 {
     (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(1000));
     bool angle;
     for (;;)
     {
-        vTaskSuspend(NULL);
+
         switch (programState)
         {
         case MENU:
-
             switch (bEvent)
             {
-            case B1_SHORT:
-                if (!angle)
-                {
-                    msg_print(" angle\n*lux", false);
-                    angle = true;
-                }
-                else
-                {
-                    msg_print("*angle\n lux", false);
-                    angle = false;
-                }
-
-                break;
-
             case B2_SHORT:
-                programState = MSG_GEN;
+                angle = !angle;
                 break;
+
+            case B1_SHORT:
+                programState = MSG_GEN;
+                bEvent = B_NONE;
+                continue;
             }
+            print_menu(angle);
             break;
 
         case MSG_GEN:
             msg_gen();
+            if (programState == MENU)
+            {
+                continue;
+            }
             break;
         }
         bEvent = B_NONE;
+        vTaskSuspend(NULL);
     }
 }
 
@@ -310,7 +345,7 @@ static void example_task(void *arg)
     {
         tight_loop_contents(); // Modify with application code here.
         // printf("Example task alive\n");
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        vTaskDelay(pdMS_TO_TICKS(50000));
     }
 }
 
@@ -332,7 +367,6 @@ int main()
     // clear_display();
     // write_text("message");
 
-    sleep_ms(3000);
     ICM42670_start_with_default_values();
 
     pitchQueue = xQueueCreate(1, sizeof(float));
