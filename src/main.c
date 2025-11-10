@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include <pico/stdlib.h>
+#include <hardware/uart.h>
 
 #include <FreeRTOS.h>
 #include <queue.h>
@@ -23,6 +24,8 @@
 #define DISPLAY_LINE_LEN 22
 #define DISPLAY_DYNAMIC_LINES 3
 
+#define INPUT_BUFFER_SIZE 256
+
 TaskHandle_t myMainTask = NULL;
 QueueHandle_t pitchQueue = NULL;
 
@@ -42,6 +45,7 @@ typedef enum
 float pitch = 0.0f;
 
 TaskHandle_t mySensorTask = NULL;
+TaskHandle_t hReceiveTask = NULL;
 SensorState_t sensorState = ANGLE;
 
 void update_orientation(float ax, float ay, float az)
@@ -201,6 +205,7 @@ static void display_task(void *arg)
     for (;;)
     {
         vTaskSuspend(NULL);
+
         clear_display();
         write_text_xy(0, 2, displayPtr->topHeader);
 
@@ -333,6 +338,65 @@ static void main_task(void *arg)
 }
 
 /* -------------------------------------------------------------------------- */
+/*                                    uart                                    */
+/* -------------------------------------------------------------------------- */
+
+static void receive_task(void *arg)
+{
+    (void)arg;
+    char line[30];
+    size_t index = 0;
+
+    while (1)
+    {
+        // OPTION 1
+        //  Using getchar_timeout_us https://www.raspberrypi.com/documentation/pico-sdk/runtime.html#group_pico_stdio_1ga5d24f1a711eba3e0084b6310f6478c1a
+        //  take one char per time and store it in line array, until reeceived the \n
+        //  The application should instead play a sound, or blink a LED.
+        int c = getchar_timeout_us(0);
+        if (c != PICO_ERROR_TIMEOUT)
+        { // I have received a character
+            if (c == '\r')
+                continue; // ignore CR, wait for LF if (ch == '\n') { line[len] = '\0';
+            if (c == '\n')
+            {
+                // terminate and process the collected line
+                line[index] = '\0';
+                printf("__[RX]:\"%s\"__\n", line); // Print as debug in the output
+                index = 0;
+                vTaskDelay(pdMS_TO_TICKS(100)); // Wait for new message
+            }
+            else if (index < INPUT_BUFFER_SIZE - 1)
+            {
+                line[index++] = (char)c;
+            }
+            else
+            { // Overflow: print and restart the buffer with the new character.
+                line[INPUT_BUFFER_SIZE - 1] = '\0';
+                printf("__[RX]:\"%s\"__\n", line);
+                index = 0;
+                line[index++] = (char)c;
+            }
+        }
+        else
+        {
+            vTaskDelay(pdMS_TO_TICKS(100)); // Wait for new message
+        }
+        // OPTION 2. Use the whole buffer.
+        /*absolute_time_t next = delayed_by_us(get_absolute_time,500);//Wait 500 us
+        int read = stdio_get_until(line,INPUT_BUFFER_SIZE,next);
+        if (read == PICO_ERROR_TIMEOUT){
+            vTaskDelay(pdMS_TO_TICKS(100)); // Wait for new message
+        }
+        else {
+            line[read] = '\0'; //Last character is 0
+            printf("__[RX] \"%s\"\n__", line);
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }*/
+    }
+}
+
+/* -------------------------------------------------------------------------- */
 /*                             templates and init                             */
 /* -------------------------------------------------------------------------- */
 TaskHandle_t myExampleTask = NULL;
@@ -414,6 +478,13 @@ int main()
                 NULL,
                 2,
                 &myDisplayTask);
+
+    xTaskCreate(receive_task,       // (en) Task function
+                "receive",          // (en) Name of the task
+                DEFAULT_STACK_SIZE, // (en) Size of the stack for this task (in words). Generally 1024 or 2048
+                NULL,               // (en) Arguments of the task
+                2,                  // (en) Priority of this task
+                &hReceiveTask);     // (en) A handle to control the execution of this task
 
     // Interruption callbacks
     gpio_set_irq_enabled_with_callback(BUTTON1, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true, button_handler);
