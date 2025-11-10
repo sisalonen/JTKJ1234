@@ -4,6 +4,7 @@
 
 #include <pico/stdlib.h>
 #include <hardware/uart.h>
+#include <hardware/watchdog.h>
 
 #include <FreeRTOS.h>
 #include <queue.h>
@@ -17,7 +18,7 @@
 #define DEFAULT_STACK_SIZE 2048
 
 // Button related defines
-#define DEBOUNCE_MS 50
+#define DEBOUNCE_MS 100
 #define LONG_PRESS_DURATION_MS 1000
 
 // Display related defines
@@ -29,7 +30,7 @@
 TaskHandle_t myMainTask = NULL;
 QueueHandle_t pitchQueue = NULL;
 
-char message_str[80] = "";
+char message_str[DISPLAY_LINE_LEN] = "";
 // char display_msg[80] = "";
 
 /* -------------------------------------------------------------------------- */
@@ -48,11 +49,13 @@ TaskHandle_t mySensorTask = NULL;
 TaskHandle_t hReceiveTask = NULL;
 SensorState_t sensorState = ANGLE;
 
-void update_orientation(float ax, float ay, float az)
+float update_orientation(float ax, float ay, float az)
 {
     float pitch_acc = atan2f(-ax, sqrtf(ay * ay + az * az)) * 180.0f / M_PI;
     pitch = pitch_acc;
+    // printf("Pitch: %.2f degrees\n", pitch);
     xQueueSend(pitchQueue, &pitch, 0); // Send pitch to queue
+    return pitch;
 }
 
 static void sensor_task(void *arg)
@@ -60,15 +63,19 @@ static void sensor_task(void *arg)
     (void)arg;
 
     float ax, ay, az, gx, gy, gz, temp;
-
+    float previous;
     for (;;)
     {
         vTaskSuspend(NULL);
         ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &temp);
-
-        update_orientation(ax, ay, az);
-
-        printf("Pitch: %.2f degrees\n", pitch);
+        pitch = update_orientation(ax, ay, az);
+        if (previous == pitch)
+        {
+            init_ICM42670();
+            ICM42670_start_with_default_values();
+            printf("restarted ICM42670");
+        }
+        previous = pitch;
     }
 }
 
@@ -100,10 +107,61 @@ TaskHandle_t myButton2Task = NULL;
 ButtonState_t button1 = {.gpio = BUTTON1, .pressStart = 0, .lastInterrupt = 0, .longPressDetected = false};
 ButtonState_t button2 = {.gpio = BUTTON2, .pressStart = 0, .lastInterrupt = 0, .longPressDetected = false};
 
+void button_handler(uint gpio, uint32_t events);
+
+void toggle_button_irs(bool status)
+{
+    gpio_set_irq_enabled_with_callback(BUTTON1, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, status, button_handler);
+    gpio_set_irq_enabled(BUTTON2, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, status);
+}
+
+void button_handler(uint gpio, uint32_t events)
+{
+    {
+
+        TickType_t now = xTaskGetTickCountFromISR();
+
+        // ternary operator to decide which button data we point to.
+        ButtonState_t *btn = (gpio == BUTTON1) ? &button1 : &button2;
+        TaskHandle_t taskHandle = (gpio == BUTTON1) ? myButton1Task : myButton2Task;
+
+        // guard for unwanted interruptions that sometimes happen with single button press
+        if (now - btn->lastInterrupt < pdMS_TO_TICKS(DEBOUNCE_MS))
+        {
+            return;
+        }
+        toggle_button_irs(false);
+
+        btn->lastInterrupt = now;
+
+        if (events & GPIO_IRQ_EDGE_RISE) // Button pressed
+        {
+            btn->pressStart = now;
+            btn->longPressDetected = false;
+
+            xTaskResumeFromISR(taskHandle);
+        }
+        else if (events & GPIO_IRQ_EDGE_FALL) // Button released
+        {
+            // After long press detection
+            {
+                if (btn->longPressDetected)
+                    btn->longPressDetected = false;
+                toggle_button_irs(true);
+                return;
+            }
+            xTaskResumeFromISR(taskHandle);
+        }
+    }
+}
+
 void process_button(ButtonState_t *btn, buttonEvent_t shortPressEvent, buttonEvent_t longPressEvent)
 {
+    // disable button interrutions for one cycle
+
     for (;;)
     {
+
         bool isPressed = gpio_get(btn->gpio) == 0;
         bool longPress = (xTaskGetTickCount() - btn->pressStart > pdMS_TO_TICKS(LONG_PRESS_DURATION_MS));
 
@@ -119,7 +177,8 @@ void process_button(ButtonState_t *btn, buttonEvent_t shortPressEvent, buttonEve
             break;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(200));
+        toggle_button_irs(true);
     }
     vTaskResume(myMainTask);
 }
@@ -144,43 +203,6 @@ static void button2_task(void *arg)
     }
 }
 
-void button_handler(uint gpio, uint32_t events)
-{
-    {
-
-        TickType_t now = xTaskGetTickCountFromISR();
-
-        // ternary operator to decide which button data we point to.
-        ButtonState_t *btn = (gpio == BUTTON1) ? &button1 : &button2;
-        TaskHandle_t taskHandle = (gpio == BUTTON1) ? myButton1Task : myButton2Task;
-
-        // guard for unwanted interruptions that sometimes happen with single button press
-        if (now - btn->lastInterrupt < pdMS_TO_TICKS(DEBOUNCE_MS))
-        {
-            return;
-        }
-
-        btn->lastInterrupt = now;
-
-        if (events & GPIO_IRQ_EDGE_RISE) // Button pressed
-        {
-            btn->pressStart = now;
-            btn->longPressDetected = false;
-
-            xTaskResumeFromISR(taskHandle);
-        }
-        else if (events & GPIO_IRQ_EDGE_FALL) // Button released
-        {
-            // After long press detection
-            {
-                if (btn->longPressDetected)
-                    btn->longPressDetected = false;
-                return;
-            }
-            xTaskResumeFromISR(taskHandle);
-        }
-    }
-}
 /* -------------------------------------------------------------------------- */
 /*                                   display                                  */
 /* -------------------------------------------------------------------------- */
@@ -194,7 +216,7 @@ typedef struct
     char buttonInfo[DISPLAY_LINE_LEN];
 } displayData_t;
 
-displayData_t menu = {.topHeader = "-------MENU-------", .buttonInfo = "switch/-  confirm/-"};
+displayData_t menu = {.topHeader = "-------MENU-------", .buttonInfo = "switch/-  select/boot"};
 displayData_t msg_menu = {.topHeader = "Current message:", .buttonInfo = "gen/send  break/back"};
 displayData_t *displayPtr = NULL;
 
@@ -302,7 +324,7 @@ void msg_gen()
 static void main_task(void *arg)
 {
     (void)arg;
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    // vTaskDelay(pdMS_TO_TICKS(1000));
     bool angle;
     for (;;)
     {
@@ -320,6 +342,8 @@ static void main_task(void *arg)
                 programState = MSG_GEN;
                 bEvent = B_NONE;
                 continue;
+            case B1_LONG:
+                watchdog_reboot(0, 0, 0);
             }
             print_menu(angle);
             break;
@@ -416,6 +440,7 @@ static void example_task(void *arg)
 int main()
 {
     // inits
+
     stdio_init_all();
     init_hat_sdk();
 
@@ -428,9 +453,6 @@ int main()
     init_i2c_default();
     init_display();
     init_ICM42670();
-    // clear_display();
-    // write_text("message");
-
     ICM42670_start_with_default_values();
 
     pitchQueue = xQueueCreate(1, sizeof(float));
