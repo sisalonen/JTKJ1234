@@ -27,6 +27,13 @@
 
 #define INPUT_BUFFER_SIZE 256
 
+#define TIME_UNIT 1000
+#define DOT_DURATION TIME_UNIT
+#define DASH_DURATION (3 * TIME_UNIT)
+#define GAP_DURATION TIME_UNIT
+#define LETTER_GAP_DURATION (3 * TIME_UNIT)
+#define WORD_GAP_DURATION (7 * TIME_UNIT)
+
 TaskHandle_t myMainTask = NULL;
 QueueHandle_t pitchQueue = NULL;
 
@@ -427,6 +434,42 @@ static void receive_task(void *arg)
     }
 }
 
+TaskHandle_t myLuxTask = NULL;
+
+static void lux_task(void *arg)
+{
+    (void)arg;
+
+    float lux_off_val = (float)veml6030_read_light();
+    TickType_t onStart;
+    bool previous;
+    for (;;)
+    {
+        float lux_val = (float)veml6030_read_light();
+        bool isOn = lux_val > lux_off_val * 2;
+
+        if (isOn && !previous)
+        {
+            onStart = xTaskGetTickCount();
+            previous = true;
+            printf("on detected\n");
+        }
+        else if (!isOn && previous)
+        {
+            TickType_t duration = xTaskGetTickCount() - onStart;
+            bool dash = duration > pdMS_TO_TICKS(DASH_DURATION);
+
+            if (dash)
+                printf("dash\n");
+            else
+                printf("dot\n");
+
+            previous = false;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(TIME_UNIT / 3));
+    }
+}
 /* -------------------------------------------------------------------------- */
 /*                             templates and init                             */
 /* -------------------------------------------------------------------------- */
@@ -447,7 +490,6 @@ static void example_task(void *arg)
 int main()
 {
     // inits
-
     stdio_init_all();
     init_hat_sdk();
 
@@ -455,10 +497,12 @@ int main()
     init_button2();
     gpio_pull_up(BUTTON1);
     gpio_pull_up(BUTTON2);
+    // vTaskDelay(pdMS_TO_TICKS(6000));
 
     init_red_led();
     init_i2c_default();
     init_display();
+    init_veml6030();
     init_ICM42670();
     ICM42670_start_with_default_values();
 
@@ -486,6 +530,13 @@ int main()
                 NULL,
                 3,
                 &mySensorTask);
+
+    xTaskCreate(lux_task,
+                "lux",
+                DEFAULT_STACK_SIZE,
+                NULL,
+                3,
+                &myLuxTask);
 
     xTaskCreate(button1_task,
                 "button1",
