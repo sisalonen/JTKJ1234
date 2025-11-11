@@ -22,7 +22,7 @@
 #define LONG_PRESS_DURATION_MS 1000
 
 // Display related defines
-#define DISPLAY_LINE_LEN 22
+#define DISPLAY_LINE_LEN 30
 #define DISPLAY_DYNAMIC_LINES 3
 
 #define INPUT_BUFFER_SIZE 256
@@ -31,6 +31,7 @@ TaskHandle_t myMainTask = NULL;
 QueueHandle_t pitchQueue = NULL;
 
 char message_str[DISPLAY_LINE_LEN] = "";
+char receive_msg_str[30];
 // char display_msg[80] = "";
 
 /* -------------------------------------------------------------------------- */
@@ -271,7 +272,10 @@ void msg_print(const char *message, bool msg_only)
     }
 
     displayPtr = &msg_menu;
-    strcpy(displayPtr->dynamicContent[1], message);
+    strcpy(displayPtr->dynamicContent[0], message);
+    strcpy(displayPtr->dynamicContent[1], "received msg:");
+    strcpy(displayPtr->dynamicContent[2], receive_msg_str);
+
     vTaskResume(myDisplayTask);
 }
 
@@ -386,21 +390,24 @@ static void receive_task(void *arg)
             {
                 // terminate and process the collected line
                 line[index] = '\0';
-                printf("__[RX]:\"%s\"__\n", line); // Print as debug in the output
+                printf("__[RX]:\"%s\"__\n", line);
+                strcpy(receive_msg_str, line);
+                // Print as debug in the output
                 index = 0;
+                vTaskResume(myDisplayTask);
                 vTaskDelay(pdMS_TO_TICKS(100)); // Wait for new message
             }
             else if (index < INPUT_BUFFER_SIZE - 1)
             {
                 line[index++] = (char)c;
             }
-            else
-            { // Overflow: print and restart the buffer with the new character.
-                line[INPUT_BUFFER_SIZE - 1] = '\0';
-                printf("__[RX]:\"%s\"__\n", line);
-                index = 0;
-                line[index++] = (char)c;
-            }
+            // else
+            // { // Overflow: print and restart the buffer with the new character.
+            //     line[INPUT_BUFFER_SIZE - 1] = '\0';
+            //     printf("__[RX]:\"%s\"__\n", line);
+            //     index = 0;
+            //     line[index++] = (char)c;
+            // }
         }
         else
         {
