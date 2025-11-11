@@ -27,7 +27,7 @@
 
 #define INPUT_BUFFER_SIZE 256
 
-#define TIME_UNIT 1000
+#define TIME_UNIT 400
 #define DOT_DURATION TIME_UNIT
 #define DASH_DURATION (3 * TIME_UNIT)
 #define GAP_DURATION TIME_UNIT
@@ -456,14 +456,23 @@ static void lux_task(void *arg)
         }
         else if (!isOn && previous)
         {
+
             TickType_t duration = xTaskGetTickCount() - onStart;
             bool dash = duration > pdMS_TO_TICKS(DASH_DURATION);
+            printf("expected dash dura: %ld\n", DASH_DURATION);
+            printf("dura: %ld\n", pdTICKS_TO_MS(duration));
 
             if (dash)
+            {
                 printf("dash\n");
+                strcat(message_str, "-");
+            }
             else
+            {
                 printf("dot\n");
-
+                strcat(message_str, ".");
+            }
+            printf("Current message: { %s }\n", message_str);
             previous = false;
         }
 

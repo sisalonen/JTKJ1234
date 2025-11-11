@@ -546,7 +546,7 @@ uint32_t veml6030_read_light()
 
     uint16_t all_data = ((uint16_t)data[1] << 8) | (uint16_t)data[0];
     double luxVal_uncorrected = (double)(all_data * 0.0576);
-    printf("luxVal_uncorrected: %.2f\n", luxVal_uncorrected);
+    // printf("luxVal_uncorrected: %.2f\n", luxVal_uncorrected);
     if (luxVal_uncorrected > (double)1000)
     {
         // Polynomial is pulled from pg 10 of the datasheet.
