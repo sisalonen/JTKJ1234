@@ -22,7 +22,7 @@
 #define LONG_PRESS_DURATION_MS 1000
 
 // Display related defines
-#define DISPLAY_LINE_LEN 30
+#define DISPLAY_LINE_LEN 200
 #define DISPLAY_DYNAMIC_LINES 3
 
 #define INPUT_BUFFER_SIZE 256
@@ -38,8 +38,8 @@ TaskHandle_t myMainTask = NULL;
 QueueHandle_t pitchQueue = NULL;
 
 char message_str[DISPLAY_LINE_LEN + 1] = {0};
-char receive_msg_str[DISPLAY_LINE_LEN + 1] = {0};
-char display_msg[DISPLAY_LINE_LEN + 1] = {0};
+char receive_msg_str[DISPLAY_LINE_LEN] = {0};
+char display_msg[DISPLAY_LINE_LEN] = {0};
 
 typedef enum
 {
@@ -71,7 +71,7 @@ float update_orientation(float ax, float ay, float az)
 {
     float pitch_acc = atan2f(-ax, sqrtf(ay * ay + az * az)) * 180.0f / M_PI;
     pitch = pitch_acc;
-    // printf("Pitch: %.2f degrees\n", pitch);
+    // // printf("Pitch: %.2f degrees\n", pitch);
     xQueueSend(pitchQueue, &pitch, 0); // Send pitch to queue
     return pitch;
 }
@@ -87,7 +87,7 @@ void update_angle()
     {
         init_ICM42670();
         ICM42670_start_with_default_values();
-        printf("restarted ICM42670");
+        // printf("restarted ICM42670");
     }
     previous = pitch;
 }
@@ -108,35 +108,35 @@ void interpret_lux()
             return;
 
         float lux_val = (float)veml6030_read_light();
-        printf("lux off val:%.2f", lux_off_val);
-        printf("lux on val: %.2f", lux_val);
+        // printf("lux off val:%.2f", lux_off_val);
+        // printf("lux on val: %.2f", lux_val);
         bool isOn = lux_val > lux_off_val + 20.0f;
 
         if (isOn && !previous)
         {
             onStart = xTaskGetTickCount();
             previous = true;
-            printf("on detected\n");
+            // printf("on detected\n");
         }
         else if (!isOn && previous)
         {
 
             TickType_t duration = xTaskGetTickCount() - onStart;
             bool dash = duration > pdMS_TO_TICKS(DASH_DURATION);
-            printf("expected dash dura: %ld\n", DASH_DURATION);
-            printf("dura: %ld\n", pdTICKS_TO_MS(duration));
+            // printf("expected dash dura: %ld\n", DASH_DURATION);
+            // printf("dura: %ld\n", pdTICKS_TO_MS(duration));
 
             if (dash)
             {
-                printf("dash\n");
-                strcat(message_str, "-");
+                // printf("dash\n");
+                strncat(message_str, "-", sizeof(message_str) - strlen(message_str) - 1);
             }
             else
             {
-                printf("dot\n");
-                strcat(message_str, ".");
+                // printf("dot\n");
+                strncat(message_str, ".", sizeof(message_str) - strlen(message_str) - 1);
             }
-            printf("Current message: { %s }\n", message_str);
+            // printf("Current message: { %s }\n", message_str);
             previous = false;
         }
         // previous_lux = lux_val;
@@ -154,15 +154,15 @@ static void sensor_task(void *arg)
         {
         case IDLE:
             vTaskSuspend(NULL);
-            printf("sensor task resumed\n");
+            // printf("sensor task resumed\n");
             break;
         case ANGLE:
-            printf("angle sensor start\n");
+            // printf("angle sensor start\n");
             update_angle();
             sensorState = IDLE;
             break;
         case LUX:
-            printf("lux sensor start\n");
+            // printf("lux sensor start\n");
             interpret_lux();
             break;
         }
@@ -331,7 +331,7 @@ static void display_task(void *arg)
                 write_text_xy(0, (60 / 4) * (i + 1), "");
             }
             write_text_xy(0, (60 / 4) * (i + 1), displayPtr->dynamicContent[i]);
-            memset(displayPtr->dynamicContent[i], 0, DISPLAY_LINE_LEN);
+            memset(displayPtr->dynamicContent[i], 0, sizeof(displayPtr->dynamicContent[i]));
         }
 
         write_text_xy(0, 56, displayPtr->buttonInfo);
@@ -354,16 +354,16 @@ void popup_print(const char *message, uint32_t duration)
 
 void msg_print(const char *message, bool msg_only)
 {
-    // printf("\033[2J\033[H");
+    // // printf("\033[2J\033[H");
     if (message)
     {
         if (msg_only)
         {
-            printf("%s\n", message);
+            // printf("%s\n", message);
         }
         else
         {
-            printf("Current message: { %s }\n", message);
+            // printf("Current message: { %s }\n", message);
         }
     }
 
@@ -383,17 +383,27 @@ void print_menu(bool mode)
 }
 void msg_send(const char *message)
 {
-    // printf("attempt to send");
-    char msg[DISPLAY_LINE_LEN + 1] = {0};
-    // strcpy(msg, message);
-    // strcat(msg, "  \n");
-    // sprintf("%s", msg);
-    sprintf(msg, "%s", message);
-    strcat(msg, "  \n");
+    if (!message)
+        return;
 
-    // The string "sum of 10 and 20 is 30" is stored
-    // into buffer instead of printing on stdout
-    printf("%s", msg);
+    for (size_t i = 0; message[i] != '\0'; i++)
+    {
+        if (message[i] == '.' || message[i] == '-')
+        {
+            putchar(message[i]);
+        }
+        else if (message[i] == ' ')
+        {
+            putchar(' '); // preserve letter spacing if needed
+        }
+    }
+
+    // End marker for Python decoder
+    printf("  \n");
+    fflush(stdout);
+    // for (size_t i = 0; i < strlen(message); i++)
+    //     // printf("%02X ", (unsigned char)message[i]);
+    // // printf("\n");
 }
 
 void angle_gen_ctrl()
@@ -409,28 +419,26 @@ void angle_gen_ctrl()
         {
             if (fabsf(current_pitch) > 45.0f)
             {
-                strcat(message_str, ".");
+                strncat(message_str, ".", sizeof(message_str) - strlen(message_str) - 1);
             }
             else
             {
-                strcat(message_str, "-");
+                strncat(message_str, "-", sizeof(message_str) - strlen(message_str) - 1);
             }
         }
         break;
-
     case B1_SHORT:
-        // strcat(message_str, " ");
-        strcat(message_str, " ");
+        strncat(message_str, " ", sizeof(message_str) - strlen(message_str) - 1);
         break;
 
     case B2_LONG:
         msg_send(message_str);
+        memset(message_str, 0, sizeof(message_str));
         popup_print("Message sent!", 2000);
-        vTaskDelay(pdMS_TO_TICKS(1000));
         break;
 
     case B1_LONG:
-        memset(message_str, 0, DISPLAY_LINE_LEN); // flush message
+        memset(message_str, 0, sizeof(message_str));
         sensorState = IDLE;
         programState = MENU;
         break;
@@ -448,13 +456,13 @@ void lux_gen_ctrl()
         lux_msg_menu.buttonInfo[0] = '\n';
         if (lux_toggle)
         {
-            printf("switch sensor state to idle");
+            // printf("switch sensor state to idle");
             strcpy(lux_msg_menu.buttonInfo, "start/send flush/back");
             sensorState = IDLE;
         }
         else
         {
-            printf("switch sensor state to lux");
+            // printf("switch sensor state to lux");
             strcpy(lux_msg_menu.buttonInfo, "stop/send  flush/back");
             sensorState = LUX;
             vTaskResume(mySensorTask);
@@ -463,17 +471,17 @@ void lux_gen_ctrl()
         break;
 
     case B1_SHORT:
-        memset(message_str, 0, DISPLAY_LINE_LEN); // flush message
+        memset(message_str, 0, sizeof(message_str)); // flush message
         break;
 
     case B2_LONG:
         msg_send(message_str);
+        memset(message_str, 0, sizeof(message_str)); // flush message
         popup_print("Message sent!", 2000);
-        vTaskDelay(pdMS_TO_TICKS(1000));
         break;
 
     case B1_LONG:
-        memset(message_str, 0, DISPLAY_LINE_LEN);
+        memset(message_str, 0, sizeof(message_str));
         strcpy(lux_msg_menu.buttonInfo, "start/send flush/back");
         sensorState = IDLE;
         programState = MENU;
@@ -556,17 +564,17 @@ void blink_msg(const char *message)
         char c = message[i];
         if (c == '.')
         {
-            printf("blink dot");
+            // printf("blink dot");
             red_led_on(DOT_DURATION);
         }
         else if (c == '-')
         {
-            printf("blink dash");
+            // printf("blink dash");
             red_led_on(DASH_DURATION);
         }
         else if (c == ' ' || c == '/')
         {
-            printf("blink letter gap");
+            // printf("blink letter gap");
             sleep_ms(LETTER_GAP_DURATION);
             continue;
         }
@@ -605,7 +613,7 @@ static void receive_task(void *arg)
             {
                 // terminate and process the collected line
                 line[index] = '\0';
-                printf("__[RX]:\"%s\"__\n", line);
+                // printf("__[RX]:\"%s\"__\n", line);
                 strcpy(receive_msg_str, line);
                 strcpy(msg_only.dynamicContent[0], "New message received:");
                 vTaskResume(myBlinkTask);
@@ -621,7 +629,7 @@ static void receive_task(void *arg)
             // else
             // { // Overflow: print and restart the buffer with the new character.
             //     line[INPUT_BUFFER_SIZE - 1] = '\0';
-            //     printf("__[RX]:\"%s\"__\n", line);
+            //     // printf("__[RX]:\"%s\"__\n", line);
             //     index = 0;
             //     line[index++] = (char)c;
             // }
@@ -638,7 +646,7 @@ static void receive_task(void *arg)
         }
         else {
             line[read] = '\0'; //Last character is 0
-            printf("__[RX] \"%s\"\n__", line);
+            // printf("__[RX] \"%s\"\n__", line);
             vTaskDelay(pdMS_TO_TICKS(50));
         }*/
     }
@@ -656,7 +664,7 @@ static void example_task(void *arg)
     for (;;)
     {
         tight_loop_contents(); // Modify with application code here.
-        // printf(".- .- ... ..  --- -.  \n");
+        // // printf(".- .- ... ..  --- -.  \n");
         vTaskDelay(pdMS_TO_TICKS(2000));
     }
 }
