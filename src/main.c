@@ -381,30 +381,6 @@ void print_menu(bool mode)
     strcpy(displayPtr->dynamicContent[1], mode ? "  Lux" : "* Lux");
     vTaskResume(myDisplayTask);
 }
-void msg_send(const char *message)
-{
-    if (!message)
-        return;
-
-    for (size_t i = 0; message[i] != '\0'; i++)
-    {
-        if (message[i] == '.' || message[i] == '-')
-        {
-            putchar(message[i]);
-        }
-        else if (message[i] == ' ')
-        {
-            putchar(' '); // preserve letter spacing if needed
-        }
-    }
-
-    // End marker for Python decoder
-    printf("  \n");
-    fflush(stdout);
-    // for (size_t i = 0; i < strlen(message); i++)
-    //     // printf("%02X ", (unsigned char)message[i]);
-    // // printf("\n");
-}
 
 void angle_gen_ctrl()
 {
@@ -432,7 +408,7 @@ void angle_gen_ctrl()
         break;
 
     case B2_LONG:
-        msg_send(message_str);
+        printf("%s  \n", message_str);
         memset(message_str, 0, sizeof(message_str));
         popup_print("Message sent!", 2000);
         break;
@@ -475,7 +451,7 @@ void lux_gen_ctrl()
         break;
 
     case B2_LONG:
-        msg_send(message_str);
+        printf("%s  \n", message_str);
         memset(message_str, 0, sizeof(message_str)); // flush message
         popup_print("Message sent!", 2000);
         break;
