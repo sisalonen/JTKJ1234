@@ -37,9 +37,9 @@
 TaskHandle_t myMainTask = NULL;
 QueueHandle_t pitchQueue = NULL;
 
-char message_str[DISPLAY_LINE_LEN] = "";
-char receive_msg_str[DISPLAY_LINE_LEN] = "";
-char display_msg[DISPLAY_LINE_LEN] = "";
+char message_str[DISPLAY_LINE_LEN + 1] = {0};
+char receive_msg_str[DISPLAY_LINE_LEN + 1] = {0};
+char display_msg[DISPLAY_LINE_LEN + 1] = {0};
 
 typedef enum
 {
@@ -94,17 +94,23 @@ void update_angle()
 
 void interpret_lux()
 {
+    init_veml6030();
+    sleep_ms(500);
     float lux_off_val = (float)veml6030_read_light();
     TickType_t onStart;
     bool previous;
+    // float previous_lux = 0.0f;
 
     for (;;)
 
     {
         if (sensorState != LUX)
             return;
+
         float lux_val = (float)veml6030_read_light();
-        bool isOn = lux_val > lux_off_val * 1.5f;
+        printf("lux off val:%.2f", lux_off_val);
+        printf("lux on val: %.2f", lux_val);
+        bool isOn = lux_val > lux_off_val + 20.0f;
 
         if (isOn && !previous)
         {
@@ -133,7 +139,7 @@ void interpret_lux()
             printf("Current message: { %s }\n", message_str);
             previous = false;
         }
-
+        // previous_lux = lux_val;
         vTaskDelay(pdMS_TO_TICKS(TIME_UNIT / 3));
     }
 }
@@ -375,6 +381,20 @@ void print_menu(bool mode)
     strcpy(displayPtr->dynamicContent[1], mode ? "  Lux" : "* Lux");
     vTaskResume(myDisplayTask);
 }
+void msg_send(const char *message)
+{
+    // printf("attempt to send");
+    char msg[DISPLAY_LINE_LEN + 1] = {0};
+    // strcpy(msg, message);
+    // strcat(msg, "  \n");
+    // sprintf("%s", msg);
+    sprintf(msg, "%s", message);
+    strcat(msg, "  \n");
+
+    // The string "sum of 10 and 20 is 30" is stored
+    // into buffer instead of printing on stdout
+    printf("%s", msg);
+}
 
 void angle_gen_ctrl()
 {
@@ -399,17 +419,18 @@ void angle_gen_ctrl()
         break;
 
     case B1_SHORT:
-        // strcat(message_str, "␣");
+        // strcat(message_str, " ");
         strcat(message_str, " ");
         break;
 
     case B2_LONG:
+        msg_send(message_str);
         popup_print("Message sent!", 2000);
         vTaskDelay(pdMS_TO_TICKS(1000));
         break;
 
     case B1_LONG:
-        message_str[0] = '\0'; // flush message
+        memset(message_str, 0, DISPLAY_LINE_LEN); // flush message
         sensorState = IDLE;
         programState = MENU;
         break;
@@ -442,16 +463,17 @@ void lux_gen_ctrl()
         break;
 
     case B1_SHORT:
-        message_str[0] = '\0'; // flush message
+        memset(message_str, 0, DISPLAY_LINE_LEN); // flush message
         break;
 
     case B2_LONG:
+        msg_send(message_str);
         popup_print("Message sent!", 2000);
         vTaskDelay(pdMS_TO_TICKS(1000));
         break;
 
     case B1_LONG:
-        message_str[0] = '\0'; // flush message
+        memset(message_str, 0, DISPLAY_LINE_LEN);
         strcpy(lux_msg_menu.buttonInfo, "start/send flush/back");
         sensorState = IDLE;
         programState = MENU;
@@ -634,8 +656,8 @@ static void example_task(void *arg)
     for (;;)
     {
         tight_loop_contents(); // Modify with application code here.
-        // printf("Example task alive\n");
-        vTaskDelay(pdMS_TO_TICKS(50000));
+        // printf(".- .- ... ..  --- -.  \n");
+        vTaskDelay(pdMS_TO_TICKS(2000));
     }
 }
 
