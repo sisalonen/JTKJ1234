@@ -105,9 +105,13 @@ add_subdirectory(examples/hat_example)
 
 # Add the source files to be compiled
 # If you add the headers in a different directory, you should use: target_include_directories
-add_executable(${MAIN_TARGET}
+
+set(SOURCES
     src/main.c
-)
+    )
+
+
+add_executable(${MAIN_TARGET} ${SOURCES})
 
 # Links. Add all libraries that application is using. It must at least use the pico_stdlib
 # In addition, for the course project you are using at least:

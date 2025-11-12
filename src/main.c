@@ -38,8 +38,8 @@ TaskHandle_t myMainTask = NULL;
 QueueHandle_t pitchQueue = NULL;
 
 char message_str[DISPLAY_LINE_LEN] = "";
-char receive_msg_str[30];
-// char display_msg[80] = "";
+char receive_msg_str[DISPLAY_LINE_LEN] = "";
+char display_msg[DISPLAY_LINE_LEN] = "";
 
 typedef enum
 {
@@ -64,6 +64,7 @@ float pitch = 0.0f;
 
 TaskHandle_t mySensorTask = NULL;
 TaskHandle_t hReceiveTask = NULL;
+TaskHandle_t myBlinkTask = NULL;
 SensorState_t sensorState = IDLE;
 
 float update_orientation(float ax, float ay, float az)
@@ -103,7 +104,7 @@ void interpret_lux()
         if (sensorState != LUX)
             return;
         float lux_val = (float)veml6030_read_light();
-        bool isOn = lux_val > lux_off_val * 2;
+        bool isOn = lux_val > lux_off_val * 1.5f;
 
         if (isOn && !previous)
         {
@@ -334,11 +335,17 @@ static void display_task(void *arg)
 /*                                main state machine                          */
 /* -------------------------------------------------------------------------- */
 
-// if (msg_only)
-// {
-//     displayData_t *tempPtr = displayPtr;
-//     displayPtr = &msg_only;
-// }
+void popup_print(const char *message, uint32_t duration)
+{
+    strcpy(msg_only.dynamicContent[1], message);
+    displayData_t *tempPtr = displayPtr;
+    displayPtr = &msg_only;
+    vTaskResume(myDisplayTask);
+    sleep_ms(duration);
+    displayPtr = tempPtr;
+    vTaskResume(myDisplayTask);
+}
+
 void msg_print(const char *message, bool msg_only)
 {
     // printf("\033[2J\033[H");
@@ -364,8 +371,8 @@ void msg_print(const char *message, bool msg_only)
 void print_menu(bool mode)
 {
     displayPtr = &menu;
-    strcpy(displayPtr->dynamicContent[0], mode ? "*Angle" : " Angle");
-    strcpy(displayPtr->dynamicContent[1], mode ? " Lux" : "*Lux");
+    strcpy(displayPtr->dynamicContent[0], mode ? "* Angle" : "  Angle");
+    strcpy(displayPtr->dynamicContent[1], mode ? "  Lux" : "* Lux");
     vTaskResume(myDisplayTask);
 }
 
@@ -392,11 +399,12 @@ void angle_gen_ctrl()
         break;
 
     case B1_SHORT:
-        strcat(message_str, "␣");
+        // strcat(message_str, "␣");
+        strcat(message_str, " ");
         break;
 
     case B2_LONG:
-        msg_print("Message sent!", true);
+        popup_print("Message sent!", 2000);
         vTaskDelay(pdMS_TO_TICKS(1000));
         break;
 
@@ -438,7 +446,7 @@ void lux_gen_ctrl()
         break;
 
     case B2_LONG:
-        msg_print("Message sent!", true);
+        popup_print("Message sent!", 2000);
         vTaskDelay(pdMS_TO_TICKS(1000));
         break;
 
@@ -511,6 +519,49 @@ static void main_task(void *arg)
 /*                                    uart                                    */
 /* -------------------------------------------------------------------------- */
 
+void red_led_on(uint32_t duration)
+{
+    toggle_red_led();
+    sleep_ms(duration);
+    toggle_red_led();
+}
+
+void blink_msg(const char *message)
+{
+    size_t len = strlen(message);
+    for (size_t i = 0; i < len; i++)
+    {
+        char c = message[i];
+        if (c == '.')
+        {
+            printf("blink dot");
+            red_led_on(DOT_DURATION);
+        }
+        else if (c == '-')
+        {
+            printf("blink dash");
+            red_led_on(DASH_DURATION);
+        }
+        else if (c == ' ' || c == '/')
+        {
+            printf("blink letter gap");
+            sleep_ms(LETTER_GAP_DURATION);
+            continue;
+        }
+        sleep_ms(GAP_DURATION);
+    }
+}
+
+static void blink_task(void *arg)
+{
+    (void)arg;
+    for (;;)
+    {
+        vTaskSuspend(NULL);
+        blink_msg(receive_msg_str);
+    }
+}
+
 static void receive_task(void *arg)
 {
     (void)arg;
@@ -534,6 +585,9 @@ static void receive_task(void *arg)
                 line[index] = '\0';
                 printf("__[RX]:\"%s\"__\n", line);
                 strcpy(receive_msg_str, line);
+                strcpy(msg_only.dynamicContent[0], "New message received:");
+                vTaskResume(myBlinkTask);
+                popup_print(receive_msg_str, 3000);
                 // Print as debug in the output
                 index = 0;
                 vTaskDelay(pdMS_TO_TICKS(100)); // Wait for new message
@@ -649,6 +703,13 @@ int main()
                 NULL,
                 2,
                 &hReceiveTask);
+
+    xTaskCreate(blink_task,
+                "blink",
+                DEFAULT_STACK_SIZE,
+                NULL,
+                2,
+                &myBlinkTask);
 
     xTaskCreate(main_task,
                 "main",
