@@ -41,21 +41,30 @@ char message_str[DISPLAY_LINE_LEN] = "";
 char receive_msg_str[30];
 // char display_msg[80] = "";
 
-/* -------------------------------------------------------------------------- */
-/*                                   sensors                                  */
-/* -------------------------------------------------------------------------- */
-#define ALPHA 0.98f
 typedef enum
 {
     IDLE,
     ANGLE,
+    LUX
 } SensorState_t;
+typedef enum
+{
+    MENU,
+    MSG_GEN
+} ProgramState_t;
+
+ProgramState_t programState = MENU;
+
+/* -------------------------------------------------------------------------- */
+/*                                   sensors                                  */
+/* -------------------------------------------------------------------------- */
+#define ALPHA 0.98f
 
 float pitch = 0.0f;
 
 TaskHandle_t mySensorTask = NULL;
 TaskHandle_t hReceiveTask = NULL;
-SensorState_t sensorState = ANGLE;
+SensorState_t sensorState = IDLE;
 
 float update_orientation(float ax, float ay, float az)
 {
@@ -66,24 +75,90 @@ float update_orientation(float ax, float ay, float az)
     return pitch;
 }
 
+void update_angle()
+{
+    float ax, ay, az, gx, gy, gz, temp;
+    float previous;
+    ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &temp);
+    pitch = update_orientation(ax, ay, az);
+    // recovery action for i2c data corruption
+    if (previous == pitch)
+    {
+        init_ICM42670();
+        ICM42670_start_with_default_values();
+        printf("restarted ICM42670");
+    }
+    previous = pitch;
+}
+
+void interpret_lux()
+{
+    float lux_off_val = (float)veml6030_read_light();
+    TickType_t onStart;
+    bool previous;
+
+    for (;;)
+
+    {
+        if (sensorState != LUX)
+            return;
+        float lux_val = (float)veml6030_read_light();
+        bool isOn = lux_val > lux_off_val * 2;
+
+        if (isOn && !previous)
+        {
+            onStart = xTaskGetTickCount();
+            previous = true;
+            printf("on detected\n");
+        }
+        else if (!isOn && previous)
+        {
+
+            TickType_t duration = xTaskGetTickCount() - onStart;
+            bool dash = duration > pdMS_TO_TICKS(DASH_DURATION);
+            printf("expected dash dura: %ld\n", DASH_DURATION);
+            printf("dura: %ld\n", pdTICKS_TO_MS(duration));
+
+            if (dash)
+            {
+                printf("dash\n");
+                strcat(message_str, "-");
+            }
+            else
+            {
+                printf("dot\n");
+                strcat(message_str, ".");
+            }
+            printf("Current message: { %s }\n", message_str);
+            previous = false;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(TIME_UNIT / 3));
+    }
+}
+
 static void sensor_task(void *arg)
 {
     (void)arg;
-
-    float ax, ay, az, gx, gy, gz, temp;
-    float previous;
     for (;;)
     {
-        vTaskSuspend(NULL);
-        ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &temp);
-        pitch = update_orientation(ax, ay, az);
-        if (previous == pitch)
+
+        switch (sensorState)
         {
-            init_ICM42670();
-            ICM42670_start_with_default_values();
-            printf("restarted ICM42670");
+        case IDLE:
+            vTaskSuspend(NULL);
+            printf("sensor task resumed\n");
+            break;
+        case ANGLE:
+            printf("angle sensor start\n");
+            update_angle();
+            sensorState = IDLE;
+            break;
+        case LUX:
+            printf("lux sensor start\n");
+            interpret_lux();
+            break;
         }
-        previous = pitch;
     }
 }
 
@@ -225,7 +300,10 @@ typedef struct
 } displayData_t;
 
 displayData_t menu = {.topHeader = "-------MENU-------", .buttonInfo = "switch/-  select/boot"};
-displayData_t msg_menu = {.topHeader = "Current message:", .buttonInfo = "gen/send  break/back"};
+displayData_t angle_msg_menu = {.topHeader = "Angle message:", .buttonInfo = "gen/send  break/back"};
+displayData_t lux_msg_menu = {.topHeader = "Lux message:", .buttonInfo = "start/send  flush/back"};
+displayData_t msg_only = {.topHeader = "", .buttonInfo = ""};
+
 displayData_t *displayPtr = NULL;
 
 static void display_task(void *arg)
@@ -255,14 +333,12 @@ static void display_task(void *arg)
 /* -------------------------------------------------------------------------- */
 /*                                main state machine                          */
 /* -------------------------------------------------------------------------- */
-typedef enum
-{
-    MENU,
-    MSG_GEN
-} ProgramState_t;
 
-ProgramState_t programState = MENU;
-
+// if (msg_only)
+// {
+//     displayData_t *tempPtr = displayPtr;
+//     displayPtr = &msg_only;
+// }
 void msg_print(const char *message, bool msg_only)
 {
     // printf("\033[2J\033[H");
@@ -278,7 +354,6 @@ void msg_print(const char *message, bool msg_only)
         }
     }
 
-    displayPtr = &msg_menu;
     strcpy(displayPtr->dynamicContent[0], message);
     strcpy(displayPtr->dynamicContent[1], "received msg:");
     strcpy(displayPtr->dynamicContent[2], receive_msg_str);
@@ -294,11 +369,13 @@ void print_menu(bool mode)
     vTaskResume(myDisplayTask);
 }
 
-void msg_gen()
+void angle_gen_ctrl()
 {
+    displayPtr = &angle_msg_menu;
     switch (bEvent)
     {
     case B2_SHORT:
+        sensorState = ANGLE;
         vTaskResume(mySensorTask);
         float current_pitch;
         if (xQueueReceive(pitchQueue, &current_pitch, pdMS_TO_TICKS(300)) == pdTRUE)
@@ -325,10 +402,67 @@ void msg_gen()
 
     case B1_LONG:
         message_str[0] = '\0'; // flush message
+        sensorState = IDLE;
         programState = MENU;
-        bEvent = B_NONE;
-        return;
+        break;
     }
+}
+
+bool lux_toggle = false;
+void lux_gen_ctrl()
+{
+    displayPtr = &lux_msg_menu;
+    switch (bEvent)
+    {
+    case B2_SHORT:
+        // start lux recording
+        lux_msg_menu.buttonInfo[0] = '\n';
+        if (lux_toggle)
+        {
+            printf("switch sensor state to idle");
+            strcpy(lux_msg_menu.buttonInfo, "start/send flush/back");
+            sensorState = IDLE;
+        }
+        else
+        {
+            printf("switch sensor state to lux");
+            strcpy(lux_msg_menu.buttonInfo, "stop/send  flush/back");
+            sensorState = LUX;
+            vTaskResume(mySensorTask);
+        }
+        lux_toggle = !lux_toggle;
+        break;
+
+    case B1_SHORT:
+        message_str[0] = '\0'; // flush message
+        break;
+
+    case B2_LONG:
+        msg_print("Message sent!", true);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        break;
+
+    case B1_LONG:
+        message_str[0] = '\0'; // flush message
+        strcpy(lux_msg_menu.buttonInfo, "start/send flush/back");
+        sensorState = IDLE;
+        programState = MENU;
+        lux_toggle = false;
+        break;
+    }
+}
+
+void msg_gen(bool genUsingAngle)
+{
+    if (genUsingAngle)
+    {
+        angle_gen_ctrl();
+    }
+    else
+    {
+        lux_gen_ctrl();
+    }
+    bEvent = B_NONE;
     msg_print(message_str, false);
 }
 
@@ -336,7 +470,7 @@ static void main_task(void *arg)
 {
     (void)arg;
     // vTaskDelay(pdMS_TO_TICKS(1000));
-    bool angle;
+    bool angle = true;
     for (;;)
     {
 
@@ -351,6 +485,7 @@ static void main_task(void *arg)
 
             case B1_SHORT:
                 programState = MSG_GEN;
+
                 bEvent = B_NONE;
                 continue;
             case B1_LONG:
@@ -360,7 +495,7 @@ static void main_task(void *arg)
             break;
 
         case MSG_GEN:
-            msg_gen();
+            msg_gen(angle);
             if (programState == MENU)
             {
                 continue;
@@ -401,7 +536,6 @@ static void receive_task(void *arg)
                 strcpy(receive_msg_str, line);
                 // Print as debug in the output
                 index = 0;
-                vTaskResume(myDisplayTask);
                 vTaskDelay(pdMS_TO_TICKS(100)); // Wait for new message
             }
             else if (index < INPUT_BUFFER_SIZE - 1)
@@ -434,51 +568,6 @@ static void receive_task(void *arg)
     }
 }
 
-TaskHandle_t myLuxTask = NULL;
-
-static void lux_task(void *arg)
-{
-    (void)arg;
-
-    float lux_off_val = (float)veml6030_read_light();
-    TickType_t onStart;
-    bool previous;
-    for (;;)
-    {
-        float lux_val = (float)veml6030_read_light();
-        bool isOn = lux_val > lux_off_val * 2;
-
-        if (isOn && !previous)
-        {
-            onStart = xTaskGetTickCount();
-            previous = true;
-            printf("on detected\n");
-        }
-        else if (!isOn && previous)
-        {
-
-            TickType_t duration = xTaskGetTickCount() - onStart;
-            bool dash = duration > pdMS_TO_TICKS(DASH_DURATION);
-            printf("expected dash dura: %ld\n", DASH_DURATION);
-            printf("dura: %ld\n", pdTICKS_TO_MS(duration));
-
-            if (dash)
-            {
-                printf("dash\n");
-                strcat(message_str, "-");
-            }
-            else
-            {
-                printf("dot\n");
-                strcat(message_str, ".");
-            }
-            printf("Current message: { %s }\n", message_str);
-            previous = false;
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(TIME_UNIT / 3));
-    }
-}
 /* -------------------------------------------------------------------------- */
 /*                             templates and init                             */
 /* -------------------------------------------------------------------------- */
@@ -526,26 +615,12 @@ int main()
                 1,                  // (en) Priority of this task
                 &myExampleTask);    // (en) A handle to control the execution of this task
 
-    xTaskCreate(main_task,
-                "main",
-                DEFAULT_STACK_SIZE,
-                NULL,
-                2,
-                &myMainTask);
-
     xTaskCreate(sensor_task,
                 "sensor",
                 DEFAULT_STACK_SIZE,
                 NULL,
                 3,
                 &mySensorTask);
-
-    xTaskCreate(lux_task,
-                "lux",
-                DEFAULT_STACK_SIZE,
-                NULL,
-                3,
-                &myLuxTask);
 
     xTaskCreate(button1_task,
                 "button1",
@@ -568,12 +643,19 @@ int main()
                 2,
                 &myDisplayTask);
 
-    xTaskCreate(receive_task,       // (en) Task function
-                "receive",          // (en) Name of the task
-                DEFAULT_STACK_SIZE, // (en) Size of the stack for this task (in words). Generally 1024 or 2048
-                NULL,               // (en) Arguments of the task
-                2,                  // (en) Priority of this task
-                &hReceiveTask);     // (en) A handle to control the execution of this task
+    xTaskCreate(receive_task,
+                "receive",
+                DEFAULT_STACK_SIZE,
+                NULL,
+                2,
+                &hReceiveTask);
+
+    xTaskCreate(main_task,
+                "main",
+                DEFAULT_STACK_SIZE,
+                NULL,
+                2,
+                &myMainTask);
 
     // Interruption callbacks
     gpio_set_irq_enabled_with_callback(BUTTON1, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true, button_handler);
