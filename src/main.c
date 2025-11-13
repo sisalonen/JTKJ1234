@@ -14,6 +14,7 @@
 
 #include "tkjhat/sdk.h"
 #include "semphr.h"
+#include "translator.h"
 
 // Define the semaphore handle
 xSemaphoreHandle I2C_semaphore;
@@ -31,12 +32,14 @@ xSemaphoreHandle I2C_semaphore;
 
 #define INPUT_BUFFER_SIZE 256
 
+// sender expected to use time unit of 500ms.
+// macros set to compensate for jitter of the sampling logic.
 #define TIME_UNIT 400
 #define DOT_DURATION TIME_UNIT
 #define DASH_DURATION (3 * TIME_UNIT)
 #define GAP_DURATION TIME_UNIT
-#define LETTER_GAP_DURATION (3 * TIME_UNIT)
-#define WORD_GAP_DURATION (7 * TIME_UNIT)
+#define LETTER_GAP_DURATION (2 * TIME_UNIT)
+#define WORD_GAP_DURATION (6 * TIME_UNIT)
 
 TaskHandle_t myMainTask = NULL;
 QueueHandle_t pitchQueue = NULL;
@@ -95,7 +98,7 @@ void update_angle()
         {
             init_ICM42670();
             ICM42670_start_with_default_values();
-            printf("restarted ICM42670");
+            // printf("restarted ICM42670");
         }
 
         xSemaphoreGive(I2C_semaphore);
@@ -109,23 +112,24 @@ void interpret_lux()
 {
     init_veml6030();
     float lux_off_val;
-    printf("got into lux task\n");
+    // printf("got into lux task\n");
 
     // Read the initial lux value to define the 'off' threshold.
     if (xSemaphoreTake(I2C_semaphore, portMAX_DELAY) == pdTRUE)
     {
-        printf("lux sema take");
+        // printf("lux sema take");
 
         lux_off_val = (float)veml6030_read_light();
         xSemaphoreGive(I2C_semaphore);
-        printf("lux sema give");
+        // printf("lux sema give");
     }
-    printf("got into lux and first sema skipped?\n");
+    // printf("got into lux and first sema skipped?\n");
 
     TickType_t onStart;
     bool previous = false;
     TickType_t lastTransitionTime = 0;
     bool isOn = false;
+    bool letterGapRegistered;
 
     for (;;)
     {
@@ -135,10 +139,10 @@ void interpret_lux()
         float lux_val;
         if (xSemaphoreTake(I2C_semaphore, portMAX_DELAY) == pdTRUE)
         {
-            printf("lux sema take");
+            // printf("lux sema take");
             lux_val = (float)veml6030_read_light();
             xSemaphoreGive(I2C_semaphore);
-            printf("lux sema give");
+            // printf("lux sema give");
         }
 
         isOn = lux_val > lux_off_val + 20.0f;
@@ -172,23 +176,27 @@ void interpret_lux()
 
         TickType_t currentTime = xTaskGetTickCount();
 
-        if (lastTransitionTime != 0)
+        if (!isOn && lastTransitionTime != 0)
         {
             TickType_t gapDuration = currentTime - lastTransitionTime;
 
-            if (gapDuration >= pdMS_TO_TICKS(LETTER_GAP_DURATION))
-            {
-                printf("letter gap\n");
-                strncat(message_str, " ", sizeof(message_str) - strlen(message_str) - 1);
-                lastTransitionTime = currentTime;
-            }
-
             if (gapDuration >= pdMS_TO_TICKS(WORD_GAP_DURATION))
             {
-                printf("word gap\n");
+                // printf("registered WORD gap\n");
                 strncat(message_str, "  ", sizeof(message_str) - strlen(message_str) - 1);
-                lastTransitionTime = currentTime;
+                lastTransitionTime = 0;
             }
+            else if (gapDuration >= pdMS_TO_TICKS(LETTER_GAP_DURATION) && !letterGapRegistered)
+            {
+                // printf("registered LETTER gap\n");
+                strncat(message_str, " ", sizeof(message_str) - strlen(message_str) - 1);
+                letterGapRegistered = true;
+            }
+        }
+        else if (isOn)
+        {
+            // Reset state when light turns back on
+            letterGapRegistered = false;
         }
 
         vTaskDelay(pdMS_TO_TICKS(TIME_UNIT / 3));
@@ -373,7 +381,7 @@ static void display_task(void *arg)
         vTaskSuspend(NULL);
         if (xSemaphoreTake(I2C_semaphore, portMAX_DELAY) == pdTRUE)
         {
-            printf("display sema take");
+            // printf("display sema take");
             clear_display();
             write_text_xy(0, 2, displayPtr->topHeader);
 
@@ -389,7 +397,7 @@ static void display_task(void *arg)
 
             write_text_xy(0, 56, displayPtr->buttonInfo);
             xSemaphoreGive(I2C_semaphore);
-            printf("display sema give");
+            // printf("display sema give");
         }
     }
 }
@@ -408,24 +416,14 @@ void popup_print(const char *message, uint32_t duration)
     vTaskResume(myDisplayTask);
 }
 
-void msg_print(const char *message, bool msg_only)
+void msg_print(char *message, bool translate)
 {
     // printf("\033[2J\033[H");
-    if (message)
-    {
-        if (msg_only)
-        {
-            // printf("%s\n", message);
-        }
-        else
-        {
-            // printf("Current message: { %s }\n", message);
-        }
-    }
 
-    strcpy(displayPtr->dynamicContent[0], message);
-    // strcpy(displayPtr->dynamicContent[1], "received msg:");
-    // strcpy(displayPtr->dynamicContent[2], receive_msg_str);
+    strcpy(displayPtr->dynamicContent[0], (translate) ? morseToText(message) : message);
+    strcpy(displayPtr->dynamicContent[1], message);
+    printf("translated: (%s)\n", displayPtr->dynamicContent[0]);
+    printf("morse: (%s)\n", displayPtr->dynamicContent[1]);
 
     vTaskResume(myDisplayTask);
 }
@@ -534,7 +532,7 @@ void msg_gen(bool genUsingAngle)
     }
     bEvent = B_NONE;
     sleep_ms(100);
-    msg_print(message_str, false);
+    msg_print(message_str, true);
 }
 
 static void main_task(void *arg)
@@ -648,6 +646,8 @@ static void receive_task(void *arg)
                 // printf("__[RX]:\"%s\"__\n", line);
                 strcpy(receive_msg_str, line);
                 strcpy(msg_only.dynamicContent[0], "New message received:");
+                strcpy(msg_only.dynamicContent[2], morseToText(receive_msg_str));
+
                 vTaskResume(myBlinkTask);
                 popup_print(receive_msg_str, 3000);
                 // Print as debug in the output

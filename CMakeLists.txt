@@ -105,47 +105,29 @@ add_subdirectory(examples/hat_example)
 
 # Add the source files to be compiled
 # If you add the headers in a different directory, you should use: target_include_directories
+# === Main app sources ===
+file(GLOB SRC_FILES ${CMAKE_CURRENT_LIST_DIR}/src/*.c)
 
-set(SOURCES
-    src/main.c
-    )
+add_executable(${MAIN_TARGET} ${SRC_FILES})
 
-
-add_executable(${MAIN_TARGET} ${SOURCES})
-
-# Links. Add all libraries that application is using. It must at least use the pico_stdlib
-# In addition, for the course project you are using at least:
-#   * FreeRTOS-Kernel -> FreeRTOS functions: tasks queues, timers, lists ...
-#   * FreeRTOS-Kernel-Heap4 -> Memory allocators for FreeRTOS
-#   * TKJHAT_SDK -> SDK to control the HAT
-#   * usb_serial_debug -> Auxiliar library which creates two serial ports one for sending data an the other for debug
-#
-target_link_libraries(${MAIN_TARGET}
-        pico_stdlib
-        FreeRTOS-Kernel
-        FreeRTOS-Kernel-Heap4
-        TKJHAT_SDK
+target_include_directories(${MAIN_TARGET} PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/src
 )
 
-# Include libraries necessaries to control the WiFi. If you are using the internal pico LED in W model, it is also 
-# necessary 
+target_link_libraries(${MAIN_TARGET}
+    pico_stdlib
+    FreeRTOS-Kernel
+    FreeRTOS-Kernel-Heap4
+    TKJHAT_SDK
+)
+
 if (PICO_CYW43_SUPPORTED)
     target_link_libraries(${MAIN_TARGET} pico_cyw43_arch_none)
 endif()
 
-#Support for stdio (printf, fwrite, puts...) via usb or UART. 
 pico_enable_stdio_usb(${MAIN_TARGET} 1)
 pico_enable_stdio_uart(${MAIN_TARGET} 0)
-
-# Create different output files: 
-# .elf -> Executable with debug info (for GDB)  
-# .bin -> Raw binary image (for flashing tools)  
-# .hex -> Intel HEX format image (alternative flashing format)  
-# .uf2 -> UF2 image (drag & drop to Pico USB drive)  
-# .map -> Linker map (memory layout & symbols)  
-# .dis -> Disassembly of the ELF (readable assembly listing)  
 pico_add_extra_outputs(${MAIN_TARGET})
-
 # add url via pico_set_program_url
 pico_set_program_url(${MAIN_TARGET} https://github.com/UniOulu-Ubicomp-Programming-Courses/JTKJ-PicoRTOS-ProjectP)
 # ==================================================================================
