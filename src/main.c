@@ -110,6 +110,8 @@ void interpret_lux()
     init_veml6030();
     float lux_off_val;
     printf("got into lux task\n");
+
+    // Read the initial lux value to define the 'off' threshold.
     if (xSemaphoreTake(I2C_semaphore, portMAX_DELAY) == pdTRUE)
     {
         printf("lux sema take");
@@ -121,14 +123,15 @@ void interpret_lux()
     printf("got into lux and first sema skipped?\n");
 
     TickType_t onStart;
-    bool previous;
-    // float previous_lux = 0.0f;
+    bool previous = false;
+    TickType_t lastTransitionTime = 0;
+    bool isOn = false;
 
     for (;;)
-
     {
         if (sensorState != LUX)
             return;
+
         float lux_val;
         if (xSemaphoreTake(I2C_semaphore, portMAX_DELAY) == pdTRUE)
         {
@@ -137,23 +140,20 @@ void interpret_lux()
             xSemaphoreGive(I2C_semaphore);
             printf("lux sema give");
         }
-        // printf("lux off val:%.2f", lux_off_val);
-        // printf("lux on val: %.2f", lux_val);
-        bool isOn = lux_val > lux_off_val + 20.0f;
+
+        isOn = lux_val > lux_off_val + 20.0f;
 
         if (isOn && !previous)
         {
             onStart = xTaskGetTickCount();
             previous = true;
-            // printf("on detected\n");
+            lastTransitionTime = xTaskGetTickCount();
         }
         else if (!isOn && previous)
         {
 
             TickType_t duration = xTaskGetTickCount() - onStart;
             bool dash = duration > pdMS_TO_TICKS(DASH_DURATION);
-            // printf("expected dash dura: %ld\n", DASH_DURATION);
-            // printf("dura: %ld\n", pdTICKS_TO_MS(duration));
 
             if (dash)
             {
@@ -165,10 +165,32 @@ void interpret_lux()
                 // printf("dot\n");
                 strncat(message_str, ".", sizeof(message_str) - strlen(message_str) - 1);
             }
-            // printf("Current message: { %s }\n", message_str);
+
             previous = false;
+            lastTransitionTime = xTaskGetTickCount();
         }
-        // previous_lux = lux_val;
+
+        TickType_t currentTime = xTaskGetTickCount();
+
+        if (lastTransitionTime != 0)
+        {
+            TickType_t gapDuration = currentTime - lastTransitionTime;
+
+            if (gapDuration >= pdMS_TO_TICKS(LETTER_GAP_DURATION))
+            {
+                printf("letter gap\n");
+                strncat(message_str, " ", sizeof(message_str) - strlen(message_str) - 1);
+                lastTransitionTime = currentTime;
+            }
+
+            if (gapDuration >= pdMS_TO_TICKS(WORD_GAP_DURATION))
+            {
+                printf("word gap\n");
+                strncat(message_str, "  ", sizeof(message_str) - strlen(message_str) - 1);
+                lastTransitionTime = currentTime;
+            }
+        }
+
         vTaskDelay(pdMS_TO_TICKS(TIME_UNIT / 3));
     }
 }
