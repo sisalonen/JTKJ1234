@@ -640,7 +640,7 @@ static void example_task(void *arg)
     for (;;)
     {
         tight_loop_contents(); // Modify with application code here.
-        // // printf(".- .- ... ..  --- -.  \n");
+        toggle_button_irs(true);
         vTaskDelay(pdMS_TO_TICKS(2000));
     }
 }
