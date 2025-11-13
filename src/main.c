@@ -32,9 +32,9 @@ xSemaphoreHandle I2C_semaphore;
 
 #define INPUT_BUFFER_SIZE 256
 
-// sender expected to use time unit of 500ms.
+// sender expected to use time unit of 250ms.
 // macros set to compensate for jitter of the sampling logic.
-#define TIME_UNIT 400
+#define TIME_UNIT 200
 #define DOT_DURATION TIME_UNIT
 #define DASH_DURATION (3 * TIME_UNIT)
 #define GAP_DURATION TIME_UNIT
@@ -61,6 +61,8 @@ typedef enum
 } ProgramState_t;
 
 ProgramState_t programState = MENU;
+
+void msg_print(char *message, bool translate);
 
 /* -------------------------------------------------------------------------- */
 /*                                   sensors                                  */
@@ -169,6 +171,7 @@ void interpret_lux()
                 // printf("dot\n");
                 strncat(message_str, ".", sizeof(message_str) - strlen(message_str) - 1);
             }
+            msg_print(message_str, true);
 
             previous = false;
             lastTransitionTime = xTaskGetTickCount();
