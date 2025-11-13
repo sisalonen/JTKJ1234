@@ -4,45 +4,61 @@
 
 char *morseToText(char morseCode[])
 {
-    // Morse code dictionary mapping to letters A-Z
-    char *morseCodeDict[] = {
+    // Morse code dictionary for A–Z
+    const char *morseCodeDict[] = {
         ".-", "-...", "-.-.", "-..", ".", "..-.",
         "--.", "....", "..", ".---", "-.-", ".-..",
         "--", "-.", "---", ".--.", "--.-", ".-.",
         "...", "-", "..-", "...-", ".--", "-..-",
         "-.--", "--.."};
 
-    // Static buffer to hold the translated text
-    static char result[1024]; // 1024 is an arbitrary size; adjust as needed
-    int index = 0;            // To keep track of the result string position
+    static char result[1024]; // buffer for result
+    int index = 0;
+    result[0] = '\0';
 
-    // Tokenize the Morse code and translate each part
-    char *token = strtok(morseCode, " ");
+    // Temporary copy since strtok modifies input
+    static char temp[1024];
+    strncpy(temp, morseCode, sizeof(temp) - 1);
+    temp[sizeof(temp) - 1] = '\0';
+
+    char *token = strtok(temp, " ");
+    int spaceCount = 0;
+
     while (token != NULL)
     {
-        if (strcmp(token, "/") == 0)
+        // Count how many spaces were between this and the previous token
+        char *next = strstr(morseCode + (token - temp) + strlen(token), " ");
+        spaceCount = 0;
+        while (next && *next == ' ')
         {
-            result[index++] = ' '; // Space for "/"
+            spaceCount++;
+            next++;
         }
-        else
+
+        // Match Morse symbol to a letter
+        int matched = 0;
+        for (int i = 0; i < 26; i++)
         {
-            // Try to match the Morse code to a letter
-            for (int i = 0; i < 26; i++)
+            if (strcmp(token, morseCodeDict[i]) == 0)
             {
-                if (strcmp(token, morseCodeDict[i]) == 0)
-                {
-                    result[index++] = 'A' + i; // Translate to corresponding letter
-                    break;
-                }
+                result[index++] = 'a' + i; // lowercase letters
+                matched = 1;
+                break;
             }
         }
+
+        // If two or more spaces → new word
+        if (spaceCount >= 2)
+        {
+            result[index++] = ' ';
+        }
+
         token = strtok(NULL, " ");
     }
-    result[index] = '\0';
 
+    result[index] = '\0';
     return result;
 }
-
 // // Example Morse code
 // char morseCode[] = "-- --- .-. ... . / -.-. --- -.. . / .. ... / "
 //                    "..-. --- .-. --. . - - .- -... .-.. .";
