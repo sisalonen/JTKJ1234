@@ -13,6 +13,10 @@
 #include <stdlib.h>
 
 #include "tkjhat/sdk.h"
+#include "semphr.h"
+
+// Define the semaphore handle
+xSemaphoreHandle I2C_semaphore;
 
 // Default stack size for the tasks. It can be reduced to 1024 if task is not using lot of memory.
 #define DEFAULT_STACK_SIZE 2048
@@ -71,7 +75,7 @@ float update_orientation(float ax, float ay, float az)
 {
     float pitch_acc = atan2f(-ax, sqrtf(ay * ay + az * az)) * 180.0f / M_PI;
     pitch = pitch_acc;
-    // // printf("Pitch: %.2f degrees\n", pitch);
+    // printf("Pitch: %.2f degrees\n", pitch);
     xQueueSend(pitchQueue, &pitch, 0); // Send pitch to queue
     return pitch;
 }
@@ -80,23 +84,42 @@ void update_angle()
 {
     float ax, ay, az, gx, gy, gz, temp;
     float previous;
-    ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &temp);
-    pitch = update_orientation(ax, ay, az);
-    // recovery action for i2c data corruption
-    if (previous == pitch)
+    // init_ICM42670();
+    if (xSemaphoreTake(I2C_semaphore, portMAX_DELAY) == pdTRUE)
     {
-        init_ICM42670();
-        ICM42670_start_with_default_values();
-        // printf("restarted ICM42670");
+        // printf("angle sema take");
+        ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &temp);
+        pitch = update_orientation(ax, ay, az);
+        // recovery action for i2c data corruption
+        if (previous == pitch)
+        {
+            init_ICM42670();
+            ICM42670_start_with_default_values();
+            printf("restarted ICM42670");
+        }
+
+        xSemaphoreGive(I2C_semaphore);
+        // printf("angle sema give");
     }
+
     previous = pitch;
 }
 
 void interpret_lux()
 {
     init_veml6030();
-    sleep_ms(500);
-    float lux_off_val = (float)veml6030_read_light();
+    float lux_off_val;
+    printf("got into lux task\n");
+    if (xSemaphoreTake(I2C_semaphore, portMAX_DELAY) == pdTRUE)
+    {
+        printf("lux sema take");
+
+        lux_off_val = (float)veml6030_read_light();
+        xSemaphoreGive(I2C_semaphore);
+        printf("lux sema give");
+    }
+    printf("got into lux and first sema skipped?\n");
+
     TickType_t onStart;
     bool previous;
     // float previous_lux = 0.0f;
@@ -106,8 +129,14 @@ void interpret_lux()
     {
         if (sensorState != LUX)
             return;
-
-        float lux_val = (float)veml6030_read_light();
+        float lux_val;
+        if (xSemaphoreTake(I2C_semaphore, portMAX_DELAY) == pdTRUE)
+        {
+            printf("lux sema take");
+            lux_val = (float)veml6030_read_light();
+            xSemaphoreGive(I2C_semaphore);
+            printf("lux sema give");
+        }
         // printf("lux off val:%.2f", lux_off_val);
         // printf("lux on val: %.2f", lux_val);
         bool isOn = lux_val > lux_off_val + 20.0f;
@@ -320,21 +349,26 @@ static void display_task(void *arg)
     for (;;)
     {
         vTaskSuspend(NULL);
-
-        clear_display();
-        write_text_xy(0, 2, displayPtr->topHeader);
-
-        for (int i = 0; i < DISPLAY_DYNAMIC_LINES; i++)
+        if (xSemaphoreTake(I2C_semaphore, portMAX_DELAY) == pdTRUE)
         {
-            if (displayPtr->dynamicContent[i][0] == '\0')
-            {
-                write_text_xy(0, (60 / 4) * (i + 1), "");
-            }
-            write_text_xy(0, (60 / 4) * (i + 1), displayPtr->dynamicContent[i]);
-            memset(displayPtr->dynamicContent[i], 0, sizeof(displayPtr->dynamicContent[i]));
-        }
+            printf("display sema take");
+            clear_display();
+            write_text_xy(0, 2, displayPtr->topHeader);
 
-        write_text_xy(0, 56, displayPtr->buttonInfo);
+            for (int i = 0; i < DISPLAY_DYNAMIC_LINES; i++)
+            {
+                if (displayPtr->dynamicContent[i][0] == '\0')
+                {
+                    write_text_xy(0, (60 / 4) * (i + 1), "");
+                }
+                write_text_xy(0, (60 / 4) * (i + 1), displayPtr->dynamicContent[i]);
+                memset(displayPtr->dynamicContent[i], 0, sizeof(displayPtr->dynamicContent[i]));
+            }
+
+            write_text_xy(0, 56, displayPtr->buttonInfo);
+            xSemaphoreGive(I2C_semaphore);
+            printf("display sema give");
+        }
     }
 }
 /* -------------------------------------------------------------------------- */
@@ -354,7 +388,7 @@ void popup_print(const char *message, uint32_t duration)
 
 void msg_print(const char *message, bool msg_only)
 {
-    // // printf("\033[2J\033[H");
+    // printf("\033[2J\033[H");
     if (message)
     {
         if (msg_only)
@@ -477,6 +511,7 @@ void msg_gen(bool genUsingAngle)
         lux_gen_ctrl();
     }
     bEvent = B_NONE;
+    sleep_ms(300);
     msg_print(message_str, false);
 }
 
@@ -485,6 +520,7 @@ static void main_task(void *arg)
     (void)arg;
     // vTaskDelay(pdMS_TO_TICKS(1000));
     bool angle = true;
+
     for (;;)
     {
 
@@ -518,6 +554,7 @@ static void main_task(void *arg)
         }
         bEvent = B_NONE;
         vTaskSuspend(NULL);
+        // init_i2c_default();
     }
 }
 
@@ -605,7 +642,7 @@ static void receive_task(void *arg)
             // else
             // { // Overflow: print and restart the buffer with the new character.
             //     line[INPUT_BUFFER_SIZE - 1] = '\0';
-            //     // printf("__[RX]:\"%s\"__\n", line);
+            //     printf("__[RX]:\"%s\"__\n", line);
             //     index = 0;
             //     line[index++] = (char)c;
             // }
@@ -622,7 +659,7 @@ static void receive_task(void *arg)
         }
         else {
             line[read] = '\0'; //Last character is 0
-            // printf("__[RX] \"%s\"\n__", line);
+            printf("__[RX] \"%s\"\n__", line);
             vTaskDelay(pdMS_TO_TICKS(50));
         }*/
     }
@@ -655,7 +692,7 @@ int main()
     init_button2();
     gpio_pull_up(BUTTON1);
     gpio_pull_up(BUTTON2);
-    // vTaskDelay(pdMS_TO_TICKS(6000));
+    // sleep_ms(8000);
 
     init_red_led();
     init_i2c_default();
@@ -665,71 +702,74 @@ int main()
     ICM42670_start_with_default_values();
 
     pitchQueue = xQueueCreate(1, sizeof(float));
+    I2C_semaphore = xSemaphoreCreateBinary();
 
     // Task creation
+    if (I2C_semaphore != NULL)
+    {
+        xSemaphoreGive(I2C_semaphore);
 
-    xTaskCreate(example_task,       // (en) Task function
-                "example",          // (en) Name of the task
-                DEFAULT_STACK_SIZE, // (en) Size of the stack for this task (in words). Generally 1024 or 2048
-                NULL,               // (en) Arguments of the task
-                1,                  // (en) Priority of this task
-                &myExampleTask);    // (en) A handle to control the execution of this task
+        xTaskCreate(example_task,       // (en) Task function
+                    "example",          // (en) Name of the task
+                    DEFAULT_STACK_SIZE, // (en) Size of the stack for this task (in words). Generally 1024 or 2048
+                    NULL,               // (en) Arguments of the task
+                    1,                  // (en) Priority of this task
+                    &myExampleTask);    // (en) A handle to control the execution of this task
 
-    xTaskCreate(sensor_task,
-                "sensor",
-                DEFAULT_STACK_SIZE,
-                NULL,
-                3,
-                &mySensorTask);
+        xTaskCreate(sensor_task,
+                    "sensor",
+                    DEFAULT_STACK_SIZE,
+                    NULL,
+                    3,
+                    &mySensorTask);
 
-    xTaskCreate(button1_task,
-                "button1",
-                DEFAULT_STACK_SIZE,
-                NULL,
-                2,
-                &myButton1Task);
+        xTaskCreate(button1_task,
+                    "button1",
+                    DEFAULT_STACK_SIZE,
+                    NULL,
+                    2,
+                    &myButton1Task);
 
-    xTaskCreate(button2_task,
-                "button2",
-                DEFAULT_STACK_SIZE,
-                NULL,
-                2,
-                &myButton2Task);
+        xTaskCreate(button2_task,
+                    "button2",
+                    DEFAULT_STACK_SIZE,
+                    NULL,
+                    2,
+                    &myButton2Task);
 
-    xTaskCreate(display_task,
-                "display",
-                DEFAULT_STACK_SIZE,
-                NULL,
-                2,
-                &myDisplayTask);
+        xTaskCreate(display_task,
+                    "display",
+                    DEFAULT_STACK_SIZE,
+                    NULL,
+                    2,
+                    &myDisplayTask);
 
-    xTaskCreate(receive_task,
-                "receive",
-                DEFAULT_STACK_SIZE,
-                NULL,
-                2,
-                &hReceiveTask);
+        xTaskCreate(receive_task,
+                    "receive",
+                    DEFAULT_STACK_SIZE,
+                    NULL,
+                    2,
+                    &hReceiveTask);
 
-    xTaskCreate(blink_task,
-                "blink",
-                DEFAULT_STACK_SIZE,
-                NULL,
-                2,
-                &myBlinkTask);
+        xTaskCreate(blink_task,
+                    "blink",
+                    DEFAULT_STACK_SIZE,
+                    NULL,
+                    2,
+                    &myBlinkTask);
 
-    xTaskCreate(main_task,
-                "main",
-                DEFAULT_STACK_SIZE,
-                NULL,
-                2,
-                &myMainTask);
-
-    // Interruption callbacks
-    gpio_set_irq_enabled_with_callback(BUTTON1, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true, button_handler);
-    gpio_set_irq_enabled(BUTTON2, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true);
-
-    // Start the scheduler (never returns)
-    vTaskStartScheduler();
+        xTaskCreate(main_task,
+                    "main",
+                    DEFAULT_STACK_SIZE,
+                    NULL,
+                    2,
+                    &myMainTask);
+        // Interruption callbacks
+        gpio_set_irq_enabled_with_callback(BUTTON1, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true, button_handler);
+        gpio_set_irq_enabled(BUTTON2, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true);
+        // Start the scheduler (never returns)
+        vTaskStartScheduler();
+    }
 
     // Never reach this line.
     return 0;
