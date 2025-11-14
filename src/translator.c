@@ -1,62 +1,64 @@
 #include "translator.h"
 
 // translator code source https://www.geeksforgeeks.org/cpp/program-for-morse-code-translator-conversion-of-morse-code-to-english-text/
-
-char *morseToText(char morseCode[])
+char *morseToText(const char *morse)
 {
-    // Morse code dictionary for A–Z
-    const char *morseCodeDict[] = {
+    // Morse dictionary (A–Z)
+    static const char *dict[] = {
         ".-", "-...", "-.-.", "-..", ".", "..-.",
         "--.", "....", "..", ".---", "-.-", ".-..",
         "--", "-.", "---", ".--.", "--.-", ".-.",
         "...", "-", "..-", "...-", ".--", "-..-",
         "-.--", "--.."};
 
-    static char result[1024]; // buffer for result
-    int index = 0;
-    result[0] = '\0';
+    static char result[1024];
+    int r = 0;
 
-    // Temporary copy since strtok modifies input
-    static char temp[1024];
-    strncpy(temp, morseCode, sizeof(temp) - 1);
-    temp[sizeof(temp) - 1] = '\0';
+    char buffer[16];
+    int b = 0;
 
-    char *token = strtok(temp, " ");
     int spaceCount = 0;
 
-    while (token != NULL)
+    for (int i = 0;; i++)
     {
-        // Count how many spaces were between this and the previous token
-        char *next = strstr(morseCode + (token - temp) + strlen(token), " ");
-        spaceCount = 0;
-        while (next && *next == ' ')
-        {
-            spaceCount++;
-            next++;
-        }
+        char c = morse[i];
 
-        // Match Morse symbol to a letter
-        int matched = 0;
-        for (int i = 0; i < 26; i++)
+        if (c == '.' || c == '-')
         {
-            if (strcmp(token, morseCodeDict[i]) == 0)
+            buffer[b++] = c;
+            spaceCount = 0;
+        }
+        else if (c == ' ' || c == '\0')
+        {
+            if (b > 0)
             {
-                result[index++] = 'a' + i; // lowercase letters
-                matched = 1;
-                break;
+                buffer[b] = '\0';
+
+                for (int k = 0; k < 26; k++)
+                {
+                    if (strcmp(buffer, dict[k]) == 0)
+                    {
+                        result[r++] = 'a' + k;
+                        break;
+                    }
+                }
+
+                b = 0;
             }
-        }
 
-        // If two or more spaces → new word
-        if (spaceCount >= 2)
-        {
-            result[index++] = ' ';
-        }
+            spaceCount++;
 
-        token = strtok(NULL, " ");
+            if (spaceCount == 3)
+            {
+                result[r++] = ' ';
+            }
+
+            if (c == '\0')
+                break;
+        }
     }
 
-    result[index] = '\0';
+    result[r] = '\0';
     return result;
 }
 // // Example Morse code
