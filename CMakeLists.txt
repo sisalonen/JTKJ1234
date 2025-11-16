@@ -63,42 +63,14 @@ include(FreeRTOS_Kernel_import.cmake)
 target_include_directories(FreeRTOS-Kernel INTERFACE
 ${CMAKE_CURRENT_LIST_DIR}/config
 )
-#=============
-
-# NOTE: The target using FREERTOS should include in target_link_libraries the FREERTOS 
-# library that fits better: Kernel-Heap1 thru FreeRTOS-Kernel_Heap4 or FreeRTOS-Kernel-Static
-# default 
-
-# ===============================================================================================
-
 
 # DO NOT EDIT: Prepare the build to compile different libraries of the project ==================
 # Add librabries. The TKJHAT does not use libraries from FreeRTOS
 add_subdirectory(libs/TKJHAT)
 # Support for usb serial communication
 add_subdirectory(libs/usb-serial-debug)
-# If created new libraries, include them here. 
-# You can EDIT it if you add new libraries
-# ===============================================================================================
 
-# DO NOT EDIT: Prepare build to compile the different examples ==================================
-# Add examples if necessary here
-# Uncomment the examples that you want to include in your project.
-#
-add_subdirectory(examples/hello_blink)
-add_subdirectory(examples/hello_blink_freertos)
-# add_subdirectory(examples/hello_pico)
-# add_subdirectory(examples/hello_freertos)
-add_subdirectory(examples/hello_dual_cdc)
-# add_subdirectory(examples/hello_microphone)
-# add_subdirectory(examples/compilation_errors)
-add_subdirectory(examples/hello_hat)
-add_subdirectory(examples/hat_example)
-#
-# You can edit it if you want to add new examples
-# ==============================================================================================
-
-
+# ==================
 # EDIT: Prepare build to compile the main target (in root src folder) ==========================
 # NOTE: If you are creating some example you would need to include these lines
 # in the example CMakeLists.txt
