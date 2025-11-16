@@ -83,7 +83,7 @@ file(GLOB SRC_FILES ${CMAKE_CURRENT_LIST_DIR}/src/*.c)
 add_executable(${MAIN_TARGET} ${SRC_FILES})
 
 target_include_directories(${MAIN_TARGET} PRIVATE
-    ${CMAKE_CURRENT_LIST_DIR}/src
+    ${CMAKE_CURRENT_LIST_DIR}/include
 )
 
 target_link_libraries(${MAIN_TARGET}
