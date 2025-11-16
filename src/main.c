@@ -278,12 +278,11 @@ void button_handler(uint gpio, uint32_t events)
         TaskHandle_t taskHandle = (gpio == BUTTON1) ? myButton1Task : myButton2Task;
 
         // guard for unwanted interruptions that sometimes happen with single button press
-        if (now - btn->lastInterrupt < pdMS_TO_TICKS(DEBOUNCE_MS))
-        {
-            return;
-        }
+        // if (now - btn->lastInterrupt < pdMS_TO_TICKS(DEBOUNCE_MS))
+        // {
+        //     return;
+        // }
         toggle_button_irs(false);
-
         btn->lastInterrupt = now;
 
         if (events & GPIO_IRQ_EDGE_RISE) // Button pressed
