@@ -8,8 +8,6 @@
 #include <string.h>
 #include <stdio.h>
 #include <pico/stdlib.h>
-#include <FreeRTOS.h>
-#include <task.h>
 #include <hardware/watchdog.h>
 
 ProgramState_t programState = MENU;

@@ -1,4 +1,3 @@
-#include "common.h"
 #include "messenger.h"
 #include "display.h"
 #include "translator.h"

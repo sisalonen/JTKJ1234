@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdbool.h>
+
 typedef enum
 {
     B_NONE,

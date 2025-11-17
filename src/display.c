@@ -1,7 +1,6 @@
 #include "display.h"
 #include "tkjhat/sdk.h"
 #include "translator.h"
-#include "common.h"
 #include <string.h>
 #include <stdio.h>
 

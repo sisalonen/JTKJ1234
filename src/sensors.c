@@ -1,6 +1,5 @@
 #include "sensors.h"
 
-#include "common.h"
 #include "messenger.h"
 #include "display.h"
 #include "tkjhat/sdk.h"
