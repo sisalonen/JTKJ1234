@@ -11,6 +11,9 @@ displayData_t msg_only = {.topHeader = "", .buttonInfo = ""};
 displayData_t *displayPtr = NULL;
 TaskHandle_t myDisplayTask = NULL;
 
+char display_msg[DEFAULT_BUFFER_SIZE + 1] = {0};
+char message_str[DEFAULT_BUFFER_SIZE + 1] = {0};
+
 static void display_task(void *arg);
 
 void popup_print(const char *message, uint32_t duration)

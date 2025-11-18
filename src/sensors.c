@@ -26,7 +26,7 @@ static float update_angle(float ax, float ay, float az)
     // https://forum.arduino.cc/t/getting-pitch-and-roll-from-acceleromter-data/
     float pitch_acc = atan2f(-ax, sqrtf(ay * ay + az * az)) * 180.0f / M_PI;
     pitch = pitch_acc;
-    xQueueSend(pitchQueue, &pitch, 0);
+    xQueueOverwrite(pitchQueue, &pitch);
     return pitch;
 }
 
@@ -37,19 +37,10 @@ static void process_angle()
     // init_ICM42670();
     if (xSemaphoreTake(I2C_semaphore, portMAX_DELAY) == pdTRUE)
     {
-        // printf("angle sema take");
         ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &temp);
         pitch = update_angle(ax, ay, az);
-        // recovery action for i2c data corruption
-        if (previous == pitch)
-        {
-            init_ICM42670();
-            ICM42670_start_with_default_values();
-            // printf("restarted ICM42670");
-        }
 
         xSemaphoreGive(I2C_semaphore);
-        // printf("angle sema give");
     }
 
     previous = pitch;
@@ -59,22 +50,18 @@ static void interpret_lux()
 {
     init_veml6030();
     float lux_off_val;
-    // printf("got into lux task\n");
 
     // Read the initial lux value to define the 'off' threshold.
     if (xSemaphoreTake(I2C_semaphore, portMAX_DELAY) == pdTRUE)
     {
-        // printf("lux sema take");
 
         lux_off_val = (float)veml6030_read_light();
         xSemaphoreGive(I2C_semaphore);
-        // printf("lux sema give");
     }
-    // printf("got into lux and first sema skipped?\n");
 
     TickType_t onStart;
-    bool previous = false;
-    TickType_t lastTransitionTime = 0;
+    TickType_t lastTransitionTime = 0; // timestamp of when lux falls below isOn treshold
+    bool previous = false;             // was the previous cycle on (true) or off (false)
     bool isOn = false;
     bool letterGapRegistered;
 

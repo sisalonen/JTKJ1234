@@ -19,6 +19,9 @@ extern displayData_t *displayPtr;
 
 extern TaskHandle_t myDisplayTask;
 
+extern char display_msg[DEFAULT_BUFFER_SIZE + 1];
+extern char message_str[DEFAULT_BUFFER_SIZE + 1];
+
 void popup_print(const char *message, uint32_t duration);
 void msg_print(char *message, bool translate);
 void print_menu(bool mode);

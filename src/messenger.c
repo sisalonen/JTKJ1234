@@ -3,15 +3,14 @@
 #include "translator.h"
 #include "sensors.h"
 #include "tkjhat/sdk.h"
+
 #include <string.h>
 #include <pico/stdlib.h>
 
 TaskHandle_t hReceiveTask = NULL;
 TaskHandle_t myBlinkTask = NULL;
 
-char message_str[DEFAULT_BUFFER_SIZE + 1] = {0};
 char receive_msg_str[DEFAULT_BUFFER_SIZE + 1] = {0};
-char display_msg[DEFAULT_BUFFER_SIZE + 1] = {0};
 
 static void red_led_on(uint32_t duration);
 static void blink_msg(const char *message);
