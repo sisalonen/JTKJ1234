@@ -3,7 +3,7 @@
 #include <queue.h>
 #include <task.h>
 
-#define DEBOUNCE_MS 100
+#define DEBOUNCE_MS 200
 #define LONG_PRESS_DURATION_MS 1000
 
 typedef struct
@@ -17,8 +17,8 @@ typedef struct
 static QueueHandle_t buttonEventQueue;
 static TaskHandle_t myButton1Task = NULL;
 static TaskHandle_t myButton2Task = NULL;
-static ButtonState_t button1 = {.gpio = BUTTON1, .pressStart = 0, .longPressDetected = false};
-static ButtonState_t button2 = {.gpio = BUTTON2, .pressStart = 0, .longPressDetected = false};
+static ButtonState_t button1 = {.gpio = BUTTON1, .pressStart = 0, .lastInterrupt = 0, .longPressDetected = false};
+static ButtonState_t button2 = {.gpio = BUTTON2, .pressStart = 0, .lastInterrupt = 0, .longPressDetected = false};
 
 static void button_handler(uint gpio, uint32_t events);
 static void button1_task(void *arg);
@@ -59,6 +59,12 @@ static void button_handler(uint gpio, uint32_t events)
         // ternary operator to decide which button data we point to.
         ButtonState_t *btn = (gpio == BUTTON1) ? &button1 : &button2;
         TaskHandle_t taskHandle = (gpio == BUTTON1) ? myButton1Task : myButton2Task;
+
+        if (now - btn->lastInterrupt < pdMS_TO_TICKS(DEBOUNCE_MS))
+        {
+            return;
+        }
+        btn->lastInterrupt = now;
 
         if (events & GPIO_IRQ_EDGE_RISE) // Button pressed
         {

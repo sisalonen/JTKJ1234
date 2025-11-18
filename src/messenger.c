@@ -12,7 +12,6 @@ TaskHandle_t myBlinkTask = NULL;
 
 char receive_msg_str[DEFAULT_BUFFER_SIZE + 1] = {0};
 
-static void red_led_on(uint32_t duration);
 static void blink_msg(const char *message);
 static void blink_task(void *arg);
 static void receive_task(void *arg);
@@ -21,13 +20,6 @@ void messenger_task_create()
 {
     xTaskCreate(receive_task, "ReceiveTask", DEFAULT_STACK_SIZE, NULL, 2, &hReceiveTask);
     xTaskCreate(blink_task, "BlinkTask", DEFAULT_STACK_SIZE, NULL, 2, &myBlinkTask);
-}
-
-static void red_led_on(uint32_t duration)
-{
-    toggle_red_led();
-    sleep_ms(duration);
-    toggle_red_led();
 }
 
 static void blink_msg(const char *message)

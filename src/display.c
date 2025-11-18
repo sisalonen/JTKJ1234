@@ -4,7 +4,7 @@
 #include <string.h>
 #include <stdio.h>
 
-displayData_t menu = {.topHeader = "-------MENU-------", .buttonInfo = "switch/-  select/boot"};
+displayData_t menu = {.topHeader = "-------MENU-------", .buttonInfo = "switch/m  select/boot"};
 displayData_t angle_msg_menu = {.topHeader = "Angle message:", .buttonInfo = "gen/send  break/back"};
 displayData_t lux_msg_menu = {.topHeader = "Lux message:", .buttonInfo = "start/send  flush/back"};
 displayData_t msg_only = {.topHeader = "", .buttonInfo = ""};

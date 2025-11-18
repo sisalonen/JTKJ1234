@@ -22,3 +22,5 @@
 
 extern xSemaphoreHandle I2C_semaphore;
 extern QueueHandle_t pitchQueue;
+
+void red_led_on(uint32_t duration);

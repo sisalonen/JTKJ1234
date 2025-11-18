@@ -3,6 +3,7 @@
 #include "sensors.h"
 #include "buttons.h"
 #include "messenger.h"
+#include "tkjhat/sdk.h"
 
 #include <math.h>
 #include <string.h>
@@ -34,7 +35,7 @@ static void angle_gen_ctrl(ButtonEvent_t bEvent)
         sensorState = ANGLE;
         vTaskResume(mySensorTask);
         float current_pitch;
-        if (xQueueReceive(pitchQueue, &current_pitch, pdMS_TO_TICKS(300)) == pdTRUE)
+        if (xQueueReceive(pitchQueue, &current_pitch, portMAX_DELAY) == pdTRUE)
         {
             if (fabsf(current_pitch) > 45.0f)
             {
@@ -52,7 +53,6 @@ static void angle_gen_ctrl(ButtonEvent_t bEvent)
 
     case B2_LONG:
         printf("%s  \n", message_str);
-        memset(message_str, 0, sizeof(message_str));
         popup_print("Message sent!", 2000);
         break;
 
@@ -94,7 +94,6 @@ static void lux_gen_ctrl(ButtonEvent_t bEvent)
 
     case B2_LONG:
         printf("%s  \n", message_str);
-        memset(message_str, 0, sizeof(message_str)); // flush message
         popup_print("Message sent!", 2000);
         break;
 
@@ -125,14 +124,21 @@ static void msg_gen(bool genUsingAngle, ButtonEvent_t bEvent)
 static void controller_task(void *arg)
 {
     (void)arg;
-
+    bool muted = true;
     bool angle = true;
+    bool ignore_next_event = false;
     ButtonEvent_t bEvent = B_NONE;
     uint32_t value = 0;
     // Run one cycle with defaults during startup and suspend at end of the loop
     // waiting for new button event
     for (;;)
     {
+
+        if (ignore_next_event)
+        {
+            bEvent = B_NONE;
+            ignore_next_event = false; // only ignore once
+        }
 
         switch (programState)
         {
@@ -142,11 +148,13 @@ static void controller_task(void *arg)
             case B2_SHORT:
                 angle = !angle;
                 break;
-
             case B1_SHORT:
                 programState = MSG_GEN;
                 bEvent = B_NONE;
                 continue;
+            case B2_LONG:
+                muted = !muted;
+                break;
             case B1_LONG:
                 watchdog_reboot(0, 0, 0);
             }
@@ -157,12 +165,17 @@ static void controller_task(void *arg)
             msg_gen(angle, bEvent);
             if (programState == MENU)
             {
+                ignore_next_event = true; // button cooldown
                 bEvent = B_NONE;
                 continue;
             }
             break;
         }
-        // suspend until new event available
-        button_get_event(&bEvent, portMAX_DELAY);
+        if (!muted)
+        {
+            buzzer_play_tone(1800, 30);
+        }
+        red_led_on(30);
+        button_get_event(&bEvent, portMAX_DELAY); // suspend until new event available
     }
 }

@@ -19,6 +19,7 @@ int main(void)
     gpio_pull_up(BUTTON2);
 
     init_red_led();
+    init_buzzer();
     init_i2c_default();
     init_display();
     init_veml6030();
