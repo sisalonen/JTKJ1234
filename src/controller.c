@@ -15,9 +15,9 @@ TaskHandle_t myControllerTask = NULL;
 
 static bool lux_toggle = false;
 
-static void angle_gen_ctrl();
-static void lux_gen_ctrl();
-static void msg_gen(bool genUsingAngle);
+static void angle_gen_ctrl(ButtonEvent_t bEvent);
+static void lux_gen_ctrl(ButtonEvent_t bEvent);
+static void msg_gen(bool genUsingAngle, ButtonEvent_t bEvent);
 static void controller_task(void *arg);
 
 void controller_task_create()
@@ -25,7 +25,7 @@ void controller_task_create()
     xTaskCreate(controller_task, "ControllerTask", DEFAULT_STACK_SIZE, NULL, 2, &myControllerTask);
 }
 
-static void angle_gen_ctrl()
+static void angle_gen_ctrl(ButtonEvent_t bEvent)
 {
     displayPtr = &angle_msg_menu;
     switch (bEvent)
@@ -64,7 +64,7 @@ static void angle_gen_ctrl()
     }
 }
 
-static void lux_gen_ctrl()
+static void lux_gen_ctrl(ButtonEvent_t bEvent)
 {
     displayPtr = &lux_msg_menu;
     switch (bEvent)
@@ -108,17 +108,16 @@ static void lux_gen_ctrl()
     }
 }
 
-static void msg_gen(bool genUsingAngle)
+static void msg_gen(bool genUsingAngle, ButtonEvent_t bEvent)
 {
     if (genUsingAngle)
     {
-        angle_gen_ctrl();
+        angle_gen_ctrl(bEvent);
     }
     else
     {
-        lux_gen_ctrl();
+        lux_gen_ctrl(bEvent);
     }
-    bEvent = B_NONE;
     sleep_ms(100);
     msg_print(message_str, true);
 }
@@ -126,9 +125,12 @@ static void msg_gen(bool genUsingAngle)
 static void controller_task(void *arg)
 {
     (void)arg;
-    // vTaskDelay(pdMS_TO_TICKS(1000));
-    bool angle = true;
 
+    bool angle = true;
+    ButtonEvent_t bEvent = B_NONE;
+    uint32_t value = 0;
+    // Run one cycle with defaults during startup and suspend at end of the loop
+    // waiting for new button event
     for (;;)
     {
 
@@ -143,7 +145,6 @@ static void controller_task(void *arg)
 
             case B1_SHORT:
                 programState = MSG_GEN;
-
                 bEvent = B_NONE;
                 continue;
             case B1_LONG:
@@ -153,15 +154,15 @@ static void controller_task(void *arg)
             break;
 
         case MSG_GEN:
-            msg_gen(angle);
+            msg_gen(angle, bEvent);
             if (programState == MENU)
             {
+                bEvent = B_NONE;
                 continue;
             }
             break;
         }
-        bEvent = B_NONE;
-        vTaskSuspend(NULL);
-        // init_i2c_default();
+        // suspend until new event available
+        button_get_event(&bEvent, portMAX_DELAY);
     }
 }

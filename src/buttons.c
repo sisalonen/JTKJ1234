@@ -1,7 +1,7 @@
-#include "common.h"
 #include "buttons.h"
-#include "controller.h"
 #include "tkjhat/sdk.h"
+#include <queue.h>
+#include <task.h>
 
 #define DEBOUNCE_MS 100
 #define LONG_PRESS_DURATION_MS 1000
@@ -14,23 +14,26 @@ typedef struct
     bool longPressDetected;
 } ButtonState_t;
 
-buttonEvent_t bEvent = B_NONE;
-
+static QueueHandle_t buttonEventQueue;
 static TaskHandle_t myButton1Task = NULL;
 static TaskHandle_t myButton2Task = NULL;
-static ButtonState_t button1 = {.gpio = BUTTON1, .pressStart = 0, .lastInterrupt = 0, .longPressDetected = false};
-static ButtonState_t button2 = {.gpio = BUTTON2, .pressStart = 0, .lastInterrupt = 0, .longPressDetected = false};
+static ButtonState_t button1 = {.gpio = BUTTON1, .pressStart = 0, .longPressDetected = false};
+static ButtonState_t button2 = {.gpio = BUTTON2, .pressStart = 0, .longPressDetected = false};
 
 static void button_handler(uint gpio, uint32_t events);
 static void button1_task(void *arg);
 static void button2_task(void *arg);
-static void button_health_mgr(void *arg);
+
+void button_get_event(ButtonEvent_t *event, TickType_t timeout)
+{
+    xQueueReceive(buttonEventQueue, event, timeout);
+}
 
 void button_task_create(void)
 {
-    xTaskCreate(button1_task, "Button1Task", DEFAULT_STACK_SIZE, NULL, 2, &myButton1Task);
-    xTaskCreate(button2_task, "Button2Task", DEFAULT_STACK_SIZE, NULL, 2, &myButton2Task);
-    xTaskCreate(button_health_mgr, "ButtonHealthMgr", DEFAULT_STACK_SIZE, NULL, 1, NULL);
+    buttonEventQueue = xQueueCreate(1, sizeof(ButtonEvent_t));
+    xTaskCreate(button1_task, "Button1Task", 2048, NULL, 2, &myButton1Task);
+    xTaskCreate(button2_task, "Button2Task", 2048, NULL, 2, &myButton2Task);
 }
 
 void toggle_button_irs(bool status)
@@ -39,6 +42,14 @@ void toggle_button_irs(bool status)
     gpio_set_irq_enabled(BUTTON2, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, status);
 }
 
+/**
+ * @brief Handler for both button 1 & 2 interrupts (Global IRQ events to be exact).
+ * Checks which button pin caused the interrupt and updates corresponding ButtonState_t
+ * for button tasks to process further.
+ *
+ * @param gpio which gpio pin caused the event (BUTTON1 or BUTTON2)
+ * @param events event type (GPIO_IRQ_EDGE_FALL or GPIO_IRQ_EDGE_RISE)
+ */
 static void button_handler(uint gpio, uint32_t events)
 {
     {
@@ -48,14 +59,6 @@ static void button_handler(uint gpio, uint32_t events)
         // ternary operator to decide which button data we point to.
         ButtonState_t *btn = (gpio == BUTTON1) ? &button1 : &button2;
         TaskHandle_t taskHandle = (gpio == BUTTON1) ? myButton1Task : myButton2Task;
-
-        // duoble guard for unwanted interruptions that sometimes happen with single button press
-        if (now - btn->lastInterrupt < pdMS_TO_TICKS(DEBOUNCE_MS))
-        {
-            return;
-        }
-        btn->lastInterrupt = now;
-        toggle_button_irs(false);
 
         if (events & GPIO_IRQ_EDGE_RISE) // Button pressed
         {
@@ -70,21 +73,29 @@ static void button_handler(uint gpio, uint32_t events)
             {
                 if (btn->longPressDetected)
                     btn->longPressDetected = false;
-                toggle_button_irs(true);
                 return;
             }
+            // Start corresponding button task
             xTaskResumeFromISR(taskHandle);
         }
     }
 }
 
-static void process_button(ButtonState_t *btn, buttonEvent_t shortPressEvent, buttonEvent_t longPressEvent)
+/**
+ * @brief Polls button state (gpio_get) until button is either released (gpio_get == 1) or
+ * has been held down for long enough (LONG_PRESS_DURATION_MS).
+ *
+ * @param btn Pointer to either button's data.
+ * @param shortPressEvent button specific short press event name
+ * @param longPressEvent button specific long press event name
+ */
+static void process_button(ButtonState_t *btn, ButtonEvent_t shortPressEvent, ButtonEvent_t longPressEvent)
 {
-    // disable button interrutions for one cycle
-
+    static ButtonEvent_t bEvent = B_NONE;
     for (;;)
     {
 
+        // gpio_get(): https://deepbluembedded.com/raspberry-pi-pico-w-digital-inputs-outputs-c-sdk-rp2040/
         bool isPressed = gpio_get(btn->gpio) == 0;
         bool longPress = (xTaskGetTickCount() - btn->pressStart > pdMS_TO_TICKS(LONG_PRESS_DURATION_MS));
 
@@ -100,12 +111,16 @@ static void process_button(ButtonState_t *btn, buttonEvent_t shortPressEvent, bu
             break;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(100));
-        toggle_button_irs(true);
+        vTaskDelay(pdMS_TO_TICKS(200));
     }
-    vTaskResume(myControllerTask);
+    // Update the single element queue with most recent value for the getter
+    xQueueOverwrite(buttonEventQueue, &bEvent);
 }
 
+/**
+ * @brief Dedicated task for button1 status processing
+ *
+ */
 static void button1_task(void *arg)
 {
     (void)arg;
@@ -116,6 +131,10 @@ static void button1_task(void *arg)
     }
 }
 
+/**
+ * @brief Dedicated task for button2 status processing
+ *
+ */
 static void button2_task(void *arg)
 {
     (void)arg;
@@ -123,16 +142,5 @@ static void button2_task(void *arg)
     {
         vTaskSuspend(NULL);
         process_button(&button2, B2_SHORT, B2_LONG);
-    }
-}
-
-static void button_health_mgr(void *arg)
-{
-    (void)arg;
-    for (;;)
-    {
-        vTaskDelay(pdMS_TO_TICKS(3000));
-        // Re-enable interrupts in case they were missed
-        toggle_button_irs(true);
     }
 }
