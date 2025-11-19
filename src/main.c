@@ -25,6 +25,8 @@ int main(void)
     init_veml6030();
     init_ICM42670();
     ICM42670_start_with_default_values();
+    sleep_ms(6000);
+    setup_wifi();
 
     pitchQueue = xQueueCreate(1, sizeof(float));
     I2C_semaphore = xSemaphoreCreateBinary();

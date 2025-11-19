@@ -79,8 +79,12 @@ add_subdirectory(libs/usb-serial-debug)
 # If you add the headers in a different directory, you should use: target_include_directories
 # === Main app sources ===
 file(GLOB SRC_FILES ${CMAKE_CURRENT_LIST_DIR}/src/*.c)
+# Explicitly disable background mode and include polling mode
+set(PICO_CYW43_ARCH_THREADSAFE_BACKGROUND ON)  # Disable background mode
+set(PICO_CYW43_ARCH_POLL OFF)  # Enable polling mode
 
 add_executable(${MAIN_TARGET} ${SRC_FILES})
+
 
 target_include_directories(${MAIN_TARGET} PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/include
@@ -91,11 +95,12 @@ target_link_libraries(${MAIN_TARGET}
     FreeRTOS-Kernel
     FreeRTOS-Kernel-Heap4
     TKJHAT_SDK
+    pico_cyw43_arch_lwip_threadsafe_background
 )
 
-if (PICO_CYW43_SUPPORTED)
-    target_link_libraries(${MAIN_TARGET} pico_cyw43_arch_none)
-endif()
+# if (PICO_CYW43_SUPPORTED)
+#     target_link_libraries(${MAIN_TARGET} pico_cyw43_arch_none)
+# endif()
 
 pico_enable_stdio_usb(${MAIN_TARGET} 1)
 pico_enable_stdio_uart(${MAIN_TARGET} 0)
