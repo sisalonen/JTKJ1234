@@ -1,50 +1,43 @@
 #include "messenger.h"
-#include "display.h"
-#include "translator.h"
-#include "sensors.h"
 #include "tkjhat/sdk.h"
-
 #include "pico/stdlib.h"
 #include "pico/cyw43_arch.h"
-
 #include "lwip/pbuf.h"
 #include "lwip/udp.h"
 
+#include <FreeRTOS.h>
+#include <queue.h>
+#include <task.h>
 #include <string.h>
 #include <pico/stdlib.h>
 
-#define UDP_PORT 12345
-#define BEACON_MSG_LEN_MAX 127
-#define BEACON_TARGET "100.67.23.230"
-#define BEACON_INTERVAL_MS 1000
-#define RECV_BUF_SIZE 128
+#define TX_BUFFER_SIZE 128
 
-#define WIFI_SSID "panoulu"
-#define WIFI_PASSWORD NULL
+static QueueHandle_t txQueue = NULL;
+static QueueHandle_t rxQueue = NULL;
+static ip_addr_t my_ip;
+static bool info_task_on = false;
+static char target_ip_str_global[32] = "255.255.255.255";
+static int target_port_global = 12345;
 
-TaskHandle_t hReceiveTask = NULL;
-TaskHandle_t myBlinkTask = NULL;
-TaskHandle_t myrxTask = NULL;
 TaskHandle_t mytxTask = NULL;
 
-char receive_msg_str[DEFAULT_BUFFER_SIZE + 1] = {0};
-
-static void blink_msg(const char *message);
-static void blink_task(void *arg);
-static void receive_task(void *arg);
-static void udp_rx(void *arg);
+static void run_udp_unicast();
 static void udp_tx(void *arg);
+static void info_task(void *arg);
 
-void messenger_task_create()
+int setup_wifi(const char *ssid, const char *password, int auth, int timeout_ms,
+               const char *target_ip_str, int target_port)
 {
-    xTaskCreate(receive_task, "ReceiveTask", DEFAULT_STACK_SIZE, NULL, 2, &hReceiveTask);
-    xTaskCreate(blink_task, "BlinkTask", DEFAULT_STACK_SIZE, NULL, 2, &myBlinkTask);
-    xTaskCreate(udp_rx, "udpRxTask", DEFAULT_STACK_SIZE, NULL, 2, &myrxTask);
-    xTaskCreate(udp_tx, "udpTxTask", DEFAULT_STACK_SIZE, NULL, 2, &mytxTask);
-}
 
-int setup_wifi()
-{
+    // copy target ip/port into globals safely
+    if (target_ip_str)
+    {
+        strncpy(target_ip_str_global, target_ip_str, sizeof(target_ip_str_global) - 1);
+        target_ip_str_global[sizeof(target_ip_str_global) - 1] = '\0';
+    }
+    target_port_global = target_port;
+
     if (cyw43_arch_init())
     {
         printf("failed to initialise\n");
@@ -54,7 +47,7 @@ int setup_wifi()
     cyw43_arch_enable_sta_mode();
 
     printf("Connecting to Wi-Fi...\n");
-    if (cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PASSWORD, CYW43_AUTH_OPEN, 30000))
+    if (cyw43_arch_wifi_connect_timeout_ms(ssid, password, auth, timeout_ms))
     {
         printf("failed to connect.\n");
         return 1;
@@ -63,173 +56,204 @@ int setup_wifi()
     {
         printf("Connected.\n");
     }
+
+    my_ip = cyw43_state.netif[CYW43_ITF_STA].ip_addr;
+    printf("My IP is: %s\n", ipaddr_ntoa(&my_ip));
+
+    txQueue = xQueueCreate(4, sizeof(char *)); // a small queue depth >1
+    rxQueue = xQueueCreate(4, sizeof(char *));
+    if (!txQueue || !rxQueue)
+    {
+        printf("Failed to create queues\n");
+        return 1;
+    }
+
+    return 0;
 }
 
-static void blink_msg(const char *message)
+void send_udp_message(const char *message)
 {
-    size_t len = strlen(message);
-    for (size_t i = 0; i < len; i++)
+    if (!txQueue)
+        return;
+    char *msg_copy = strdup(message);
+    if (!msg_copy)
+        return;
+    // block a little if queue is full; you can use a timeout instead
+    if (xQueueSend(txQueue, &msg_copy, pdMS_TO_TICKS(100)) != pdTRUE)
     {
-        char c = message[i];
-        if (c == '.')
-        {
-            // printf("blink dot");
-            red_led_on(DOT_DURATION);
-        }
-        else if (c == '-')
-        {
-            // printf("blink dash");
-            red_led_on(DASH_DURATION);
-        }
-        else if (c == ' ' || c == '/')
-        {
-            // printf("blink letter gap");
-            sleep_ms(LETTER_GAP_DURATION);
-            continue;
-        }
-        sleep_ms(GAP_DURATION);
+        // queue full: free msg_copy to avoid memory leak
+        free(msg_copy);
     }
 }
 
-static void blink_task(void *arg)
+void receive_udp_message(char *buffer, size_t buffer_size)
 {
-    (void)arg;
-    for (;;)
+    if (!rxQueue)
+        return;
+    char *received_msg = NULL;
+    if (xQueueReceive(rxQueue, &received_msg, portMAX_DELAY) == pdTRUE && received_msg)
     {
-        vTaskSuspend(NULL);
-        blink_msg(receive_msg_str);
+        strncpy(buffer, received_msg, buffer_size - 1);
+        buffer[buffer_size - 1] = '\0';
+        free(received_msg);
     }
 }
 
-void simple_udp_receive_callback(void *arg, struct udp_pcb *upcb, struct pbuf *p, const ip_addr_t *addr, u16_t port)
+void toggle_info_task(bool enable)
 {
-    printf("got here");
-    if (p != NULL)
-    {
-        char *received_data = (char *)p->payload;
-        printf("Received UDP packet from %s:%d: %s\n", ipaddr_ntoa(addr), port, received_data);
-        pbuf_free(p); // Free the pbuf after processing the data
-    }
+    info_task_on = enable;
 }
 
-void simple_udp_receiver()
+void udp_tasks_create()
 {
-    struct udp_pcb *pcb = udp_new();
-    if (pcb == NULL)
+    xTaskCreate(udp_tx, "udpTxTask", 2048, NULL, 2, &mytxTask);
+    xTaskCreate(info_task, "infoTask", 1024, NULL, 1, NULL);
+}
+
+static void simple_udp_receive_callback(void *arg, struct udp_pcb *upcb,
+                                        struct pbuf *p, const ip_addr_t *addr, u16_t rx_port)
+{
+    if (p == NULL)
+        return;
+
+    // make a heap copy of the payload (respect p->len), null-terminate
+    size_t len = p->len;
+    char *copy = malloc(len + 1);
+    if (!copy)
     {
-        printf("Failed to create UDP PCB\n");
+        printf("malloc failed in rx callback\n");
+        pbuf_free(p);
         return;
     }
+    memcpy(copy, p->payload, len);
+    copy[len] = '\0';
 
-    ip_addr_t addr;
-    IP4_ADDR(&addr, 0, 0, 0, 0); // Listen on all interfaces
-    err_t err = udp_bind(pcb, &addr, UDP_PORT);
-    if (err != ERR_OK)
+    printf("Received UDP packet from %s:%d: %s\n", ipaddr_ntoa(addr), rx_port, copy);
+
+    // push the pointer to the queue (overwrite or send with timeout)
+    if (xQueueSend(rxQueue, &copy, 0) != pdTRUE)
     {
-        printf("Failed to bind UDP PCB: %d\n", err);
-        return;
+        // queue full, discard oldest or free copy
+        // try overwrite to keep latest:
+        xQueueOverwrite(rxQueue, &copy);
     }
 
-    udp_recv(pcb, simple_udp_receive_callback, NULL);
-
-    printf("Simple UDP receiver listening on port %d...\n", UDP_PORT);
-
-    // Add polling loop (could use cyw43_arch_poll() here if necessary)
-    while (true)
+    pbuf_free(p); // safe: we copied payload
+}
+void start_udp_receiver(int port)
+{
+    // Wait until IP is assigned
+    while (cyw43_state.netif[CYW43_ITF_STA].ip_addr.addr == 0)
     {
-        // cyw43_arch_poll();
         sleep_ms(100);
     }
-}
-static void udp_rx(void *arg)
-{
-    (void)arg;
-    simple_udp_receiver();
-}
 
-static void run_udp_beacon()
-{
+    cyw43_arch_lwip_begin();
     struct udp_pcb *pcb = udp_new();
+    cyw43_arch_lwip_end();
 
-    ip_addr_t addr;
-    ipaddr_aton(BEACON_TARGET, &addr);
-
-    int counter = 0;
-    while (true)
+    if (!pcb)
     {
-        struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, BEACON_MSG_LEN_MAX + 1, PBUF_RAM);
-        char *req = (char *)p->payload;
-        memset(req, 0, BEACON_MSG_LEN_MAX + 1);
-        snprintf(req, BEACON_MSG_LEN_MAX, "%d\n", counter);
-        err_t er = udp_sendto(pcb, p, &addr, UDP_PORT);
-        pbuf_free(p);
-        if (er != ERR_OK)
+        printf("PCB alloc failed\n");
+        return;
+    }
+
+    cyw43_arch_lwip_begin();
+    err_t err = udp_bind(pcb, IP_ADDR_ANY, port);
+    cyw43_arch_lwip_end();
+
+    printf("Bound UDP port %d, err=%d\n", port, err);
+
+    cyw43_arch_lwip_begin();
+    udp_recv(pcb, simple_udp_receive_callback, NULL);
+    cyw43_arch_lwip_end();
+
+    printf("Receiver ready!\n");
+}
+
+static void run_udp_unicast()
+{
+    ip_addr_t target_ip;
+    if (!ipaddr_aton(target_ip_str_global, &target_ip))
+    {
+        printf("Invalid IP address: %s\n", target_ip_str_global);
+        return;
+    }
+
+    cyw43_arch_lwip_begin();
+    struct udp_pcb *pcb = udp_new();
+    cyw43_arch_lwip_end();
+    if (!pcb)
+    {
+        printf("UDP pcb alloc failed\n");
+        return;
+    }
+
+    while (1)
+    {
+        char *queued_msg = NULL;
+        if (xQueueReceive(txQueue, &queued_msg, portMAX_DELAY) != pdTRUE)
         {
-            printf("Failed to send UDP packet! error=%d", er);
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+        if (!queued_msg)
+        {
+            // should not happen, but be defensive
+            continue;
+        }
+
+        size_t msg_len = strnlen(queued_msg, TX_BUFFER_SIZE - 1);
+        cyw43_arch_lwip_begin();
+        struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, msg_len + 1, PBUF_RAM);
+        cyw43_arch_lwip_end();
+
+        if (!p)
+        {
+            printf("pbuf_alloc failed\n");
+            free(queued_msg);
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+
+        memcpy(p->payload, queued_msg, msg_len);
+        ((char *)p->payload)[msg_len] = '\0';
+        free(queued_msg); // owned by us, free it now
+
+        cyw43_arch_lwip_begin();
+        err_t err = udp_sendto(pcb, p, &target_ip, target_port_global);
+        pbuf_free(p);
+        cyw43_arch_lwip_end();
+
+        if (err == ERR_OK)
+        {
+            printf("Sent\n");
         }
         else
         {
-            printf("Sent packet %d\n", counter);
-            counter++;
+            printf("udp_sendto err=%d\n", err);
         }
 
-        // Note in practice for this simple UDP transmitter,
-        // the end result for both background and poll is the same
-
-        vTaskDelay(pdMS_TO_TICKS(BEACON_INTERVAL_MS));
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
 
 static void udp_tx(void *arg)
 {
     (void)arg;
-    run_udp_beacon();
+    run_udp_unicast();
 }
 
-static void receive_task(void *arg)
+static void info_task(void *arg)
 {
     (void)arg;
-    char line[30];
-    size_t index = 0;
 
     while (1)
     {
-
-        int c = getchar_timeout_us(0);
-        if (c != PICO_ERROR_TIMEOUT)
+        if (info_task_on)
         {
-            if (c == '\r')
-                continue; // ignore CR, wait for LF if (ch == '\n') { line[len] = '\0';
-            if (c == '\n')
-            {
-                // terminate and process the collected line
-                line[index] = '\0';
-                // printf("__[RX]:\"%s\"__\n", line);
-                strcpy(receive_msg_str, line);
-                strcpy(msg_only.dynamicContent[0], "New message received:");
-                strcpy(msg_only.dynamicContent[2], morseToText(receive_msg_str));
-
-                vTaskResume(myBlinkTask);
-                popup_print(receive_msg_str, 3000);
-                // Print as debug in the output
-                index = 0;
-                vTaskDelay(pdMS_TO_TICKS(100)); // Wait for new message
-            }
-            else if (index < DEFAULT_BUFFER_SIZE - 1)
-            {
-                line[index++] = (char)c;
-            }
-            // else
-            // { // Overflow: print and restart the buffer with the new character.
-            //     line[INPUT_BUFFER_SIZE - 1] = '\0';
-            //     printf("__[RX]:\"%s\"__\n", line);
-            //     index = 0;
-            //     line[index++] = (char)c;
-            // }
+            printf("My ip is: %s\n", ipaddr_ntoa(&my_ip));
         }
-        else
-        {
-            vTaskDelay(pdMS_TO_TICKS(100)); // Wait for new message
-        }
+        vTaskDelay(pdMS_TO_TICKS(5000));
     }
 }
